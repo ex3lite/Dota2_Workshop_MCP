@@ -11,7 +11,8 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: working — **62 tools**, end-to-end tested. It generates whole playable maps from a spec
+> Status: working — **64 tools**, end-to-end tested. It can search the Workshop for custom games by
+> name and download them outside the client (SteamCMD) to study, generates whole playable maps from a spec
 > (terrain shaping via the Dota tile grid + entities + waypoint paths → compile → .vpk), previews them
 > top-down as an image without launching the game, edits KV1 + KV3 (soundevents/particles) data, reads
 > base-game files straight out of the VPKs, and scaffolds TS/Lua content, Panorama, custom events & net
@@ -33,7 +34,7 @@ fallback for non-tstl addons.
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
 | **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog`, `scaffold_td` |
-| **Study reference games** | `workshop_list`, `workshop_inspect`, `workshop_read` |
+| **Reference games** | `workshop_search`, `workshop_download`, `workshop_list`, `workshop_inspect`, `workshop_read` |
 | **Sounds & KV3** | `soundevents_list`, `soundevents_get`, `soundevents_upsert`, `kv3_read` |
 | **Assets & base game** | `assets_list`, `assets_search`, `vpk_find`, `vpk_read`, `base_kv_entry` |
 | **Events & net tables** | `scaffold_custom_event`, `scaffold_net_table` |
@@ -151,6 +152,20 @@ walk — tower defense"* into a real map:
 
 Coordinates: terrain ops use tile units (default 64×64 grid; world = origin + tile×256); entity/path
 positions use world units.
+
+## Learn from other custom games
+
+Find, fetch and dissect any published custom game — the same Steam UGC backend the client uses,
+driven from outside the game:
+
+- **`workshop_search`** — search by name (e.g. `"tower defense"`) → ids, titles, subscriber counts.
+- **`workshop_download`** — download by id via SteamCMD (anonymous; auto-installs SteamCMD on first
+  use). No Steam login needed for Dota custom games.
+- **`workshop_list` / `workshop_inspect` / `workshop_read`** — list local items (subscribed +
+  downloaded) and read any file straight out of their VPK to study how they're built.
+
+So you can go from *"how does a popular TD spawn waves?"* to reading its actual `waves.lua` in a couple
+of calls.
 
 ## Built-in references (offline)
 

@@ -67,7 +67,7 @@ async function main() {
     "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
     "scaffold_custom_event", "scaffold_net_table",
     "entity_catalog", "map_terrain", "map_build", "map_preview", "map_tile_to_world", "scaffold_td",
-    "workshop_list", "workshop_inspect", "workshop_read",
+    "workshop_list", "workshop_inspect", "workshop_read", "workshop_search", "workshop_download",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -228,6 +228,9 @@ async function main() {
   const wl = await client.callTool({ name: "workshop_list", arguments: {} });
   const hasItems = !wl.isError && /\d{6,}/.test(textOf(wl));
   check("workshop_list runs", !wl.isError);
+  // live search by name (keyless Steam web API)
+  const ws = await client.callTool({ name: "workshop_search", arguments: { query: "spin td", limit: 8 } });
+  check("workshop_search finds Spin TD by name", !ws.isError && /Spin TD/i.test(textOf(ws)) && /\d{6,}/.test(textOf(ws)));
   if (hasItems && /2860562213|Spin TD/i.test(textOf(wl))) {
     const wr = await client.callTool({ name: "workshop_read", arguments: { id: "2860562213", path: "scripts/vscripts/game/waves.lua", maxChars: 3000 } });
     check("workshop_read reads Spin TD waves.lua", /waveTable/.test(textOf(wr)));
