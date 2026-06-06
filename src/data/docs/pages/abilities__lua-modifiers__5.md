@@ -1,0 +1,652 @@
+# Custom Barriers
+
+## What are barriers?
+
+In this tutorial I'll be going over what barriers are, and how they are created and handled.
+
+To start off, we should get ourselves a little more familiar with barriers in general. Barriers come in 3 flavours;
+
+- `Universal` : Blocks All damage (gold)
+- `Physical` : Blocks Physical damage (red)
+- `Spell` : Blocks Magic damage (blue)
+
+`Physical` and `Spell` barriers only block their respective damage type, but `Universal` blocks both of those as well as pure damage. Conceptually, barriers are simple to understand. It's when we start getting into the execution that it gets more complex.
+
+### Barrier Functions
+
+| MODIFIER_PROPERTY                                   | Function Name                                      |
+| --------------------------------------------------- | -------------------------------------------------- |
+| MODIFIER_PROPERTY_INCOMING_DAMAGE_CONSTANT          | GetModifierIncomingDamageConstant( event )         |
+| MODIFIER_PROPERTY_INCOMING_PHYSICAL_DAMAGE_CONSTANT | GetModifierIncomingPhysicalDamageConstant( event ) |
+| MODIFIER_PROPERTY_INCOMING_SPELL_DAMAGE_CONSTANT    | GetModifierIncomingSpellDamageConstant( event )    |
+
+<details>
+  <summary>The event in question is a 'ModifierAttackEvent'</summary>
+  <table>
+    <tbody>
+      <tr>
+        <th scope="row">attacker</th>
+        <td>CDOTA_BaseNPC</td>
+      </tr>
+      <tr>
+        <th scope="row">damage</th>
+        <td>float</td>
+      </tr>
+      <tr>
+        <th scope="row">damage_type</th>
+        <td>DAMAGE_TYPES</td>
+      </tr>
+      <tr>
+        <th scope="row">damage_category</th>
+        <td>DamageCategory_t</td>
+      </tr>
+      <tr>
+        <th scope="row">damage_flags</th>
+        <td>DOTADamageFlag_t</td>
+      </tr>
+      <tr>
+        <th scope="row">inflictor?</th>
+        <td>CDOTABaseAbility</td>
+      </tr>
+      <tr>
+        <th scope="row">original_damage</th>
+        <td>float</td>
+      </tr>
+      <tr>
+        <th scope="row">ranged_attack</th>
+        <td>bool</td>
+      </tr>
+      <tr>
+        <th scope="row">target</th>
+        <td>CDOTA_BaseNPC</td>
+      </tr>
+      <tr>
+        <th scope="row">no_attack_cooldown</th>
+        <td>bool</td>
+      </tr>
+      <tr>
+        <th scope="row">record</th>
+        <td>int</td>
+      </tr>
+      <tr>
+        <th scope="row">fail_type</th>
+        <td>attackfail</td>
+      </tr>
+      <tr>
+        <th scope="row">report_max?</th>
+        <td>bool</td>
+      </tr>
+    </tbody>
+  </table>
+  <div>
+    The ? on inflictor and report_max denote that they are optional and may not be defined,
+    depending on how the damage was dealt (such as through an auto attack).
+  </div>
+</details>
+
+The main things you're going to want to care about from the event are:
+
+- damage
+- report_max
+
+While each property is useful when you need them, most of the time a barrier just acts as a bonus health pool for the unit, so you only care about how much damage was done. `damage` is a float that contains the amount of post-reduction damage the parent took, and `report_max` is a bool for the client that determines whether we return the max or the current health of the barrier.
+
+Since a barrier is dynamic and requires properties on both the client and the server side of the code to be in sync, we need to make use of custom transmitter data. This guide assumes you are familiar with the custom transmitter concept, but if you're not, then you can refer to the guide [here](/abilities/server-to-client#transmitters) and continue afterwards. It's alright, I'll wait.
+
+### Simple Example
+
+Below is the code for a basic all damage barrier that starts with 100 health and is removed when the health reaches 0.
+
+```lua title="Simple Universal Barrier"
+modifier_custom_all_barrier = class({})
+
+function modifier_custom_all_barrier:OnCreated()
+    if not IsServer() then return end
+
+    -- Set up our properties for the barrier's health
+    self.max_barrier_health = 100
+    self.current_barrier_health = self.max_barrier_health
+
+    -- Tell the modifier we want to transmit the data
+    self:SetHasCustomTransmitterData(true)
+end
+
+function modifier_custom_all_barrier:OnRefresh()
+    self:OnCreated()
+
+    -- Tell the client that we need to get the properties again
+    if IsServer() then self:SendBuffRefreshToClients() end
+end
+
+-- Send our properties to client
+function modifier_custom_all_barrier:AddCustomTransmitterData()
+    return {
+        max_barrier_health = self.max_barrier_health,
+        current_barrier_health = self.current_barrier_health
+    }
+end
+
+-- Get the properties from the server
+function modifier_custom_all_barrier:HandleCustomTransmitterData(data)
+    self.max_barrier_health = data.max_barrier_health
+    self.current_barrier_health = data.current_barrier_health
+end
+
+-- Declare which barrier type it is
+function modifier_custom_all_barrier:DeclareFunctions()
+    return {
+        MODIFIER_PROPERTY_INCOMING_DAMAGE_CONSTANT
+    }
+end
+
+function modifier_custom_all_barrier:GetModifierIncomingDamageConstant( event )
+
+    -- Return the max health on the client if it's a max report, otherwise return the current health
+    if IsClient() then
+        if event.report_max then
+            return self.max_barrier_health
+        else
+            return self.current_barrier_health
+        end
+    end
+
+    -- Reduce the barrier's health by the damage
+    self.current_barrier_health = self.current_barrier_health - event.damage
+
+    -- Tell the client that we need to update the health property
+    self:SendBuffRefreshToClients()
+
+    -- Check if the damage exceeded the barrier's health
+    if self.current_barrier_health <= 0 then
+        self:Destroy()
+
+        -- If it did, return the amount of damage we blocked as a negative to reduce it
+        return -(event.damage + self.current_barrier_health)
+    else
+
+        -- Otherwise, return the full value of the damage as a negative to cancel it out
+        return -event.damage
+    end
+end
+```
+
+It certainly looks like a lot, but let's go through and break it down into digestible chunks and see what is happening.
+
+### Going through the example
+
+Outside of the basic functions, we have some new ones popping up already. Some noteworthy additions are `SetHasCustomTransmitterData()` and `SendBuffRefreshToClients()`.
+
+```lua title="Basic declarations" {11,18}
+modifier_custom_all_barrier = class({})
+
+function modifier_custom_all_barrier:OnCreated()
+    if not IsServer() then return end
+
+    -- Set up our properties for the barrier's health
+    self.max_barrier_health = 100
+    self.current_barrier_health = self.max_barrier_health
+
+    -- Tell the modifier we want to transmit the data
+    self:SetHasCustomTransmitterData(true)
+end
+
+function modifier_custom_all_barrier:OnRefresh()
+    self:OnCreated()
+
+    -- Tell the client that we need to get the properties again
+    if IsServer() then self:SendBuffRefreshToClients() end
+end
+```
+
+These are used to keep our client's current health property up to date with each time it changes on the server, so we need to make sure to call `SendBuffRefreshToClients()` when the barrier's health changes.
+
+But when does it change?
+
+```lua title="Taking barrier damage" {13}
+function modifier_custom_all_barrier:GetModifierIncomingDamageConstant( event )
+
+    -- Return the max health on the client if it's a max report, otherwise return the current health
+    if IsClient() then
+        if event.report_max then
+            return self.max_barrier_health
+        else
+            return self.current_barrier_health
+        end
+    end
+
+    -- Reduce the barrier's health by the damage
+    self.current_barrier_health = self.current_barrier_health - event.damage
+
+    -- Tell the client that we need to update the health property
+    self:SendBuffRefreshToClients()
+
+    -- Check if the damage exceeded the barrier's health
+    if self.current_barrier_health <= 0 then
+        self:Destroy()
+
+        -- If it did, return the amount of damage we blocked as a negative to reduce it
+        return -(event.damage + self.current_barrier_health)
+    else
+
+        -- Otherwise, return the full value of the damage as a negative to cancel it out
+        return -event.damage
+    end
+end
+```
+
+The barrier's health is updated when `GetModifierIncomingDamageConstant()` is called. The client only cares about what the properties for max health and current health are, so it returns immediately, leaving the rest of the code for the server to deal with the logic of the barrier losing health.
+
+The way that a barrier works is that it's a flat damage reduction on the incoming damage. So after you reduce the health of the barrier, you need to return the amount of damage that you blocked so that Dota knows how much to reduce the damage by. The client has a positive number returned to it, while the server has a negative number.
+
+:::info
+The client calls `GetModifierIncomingDamageConstant()` twice per frame, once to get the max health of the barrier (report_max = true), and another time to get the current health of the barrier (report_max = false). The server only calls `GetModifierIncomingDamageConstant()` when the parent takes damage.
+:::
+
+And there we have it. We've gone through and seen how the barrier is set up and how the health is updated on both the client and the server so that it stays in sync.
+
+The rest of this page will be about a library I've been working on to both add more features to and streamline the process of making barriers in general.
+
+## Custom Barrier Library
+
+### Setting up the library
+
+This library is meant to be an extension of the normal modifier class and adds some useful methods to a modifier, and will turn it into a barrier for you. It can be put into the `vscripts` folder, but must be required on **both** the server and the client, so put it into the `addon_init.lua` file. If you don't have one, simply create it and put it in the `vscripts` folder where your `addon_game_mode.lua` file is.
+
+::: details custom_barriers.lua
+
+```lua
+if CustomBarriers == nil then CustomBarriers = {} end
+
+-- Created by Cykada (@oniisama on discord)
+-- Version 1.1.0 (lib)
+-- check https://moddota.com/abilities/lua-modifiers/5 for a guide
+
+function CustomBarriers:__GetBarrierOptions()
+
+    --? All damage barriers will not block physical or magical (doesn't effect HP Removal)
+    self.ALL_BARRIER_ONLY_BLOCKS_PURE = false
+
+    --? All damage barrier will also block hp removal flagged damage
+    self.ALL_BARRIER_BLOCK_HP_REMOVAL = false
+
+    --? Whether barriers will have a blocked damage overhead alert
+    self.SHOW_BARRIER_BLOCK_OVERHEAD_ALERT = true
+
+end
+
+--=======================================================================================
+
+function CustomBarriers:TurnModifierIntoBarrier( mod )
+
+    -- inject the barriers into the declared functions
+    if mod.DeclareFunctions ~= nil and mod:DeclareFunctions() ~= nil then
+        mod.__OldDeclareFunctions = mod.DeclareFunctions
+    else mod.__OldDeclareFunctions = function(self) return {} end end
+
+    mod.DeclareFunctions = function(self)
+        local declared_funcs = self:__OldDeclareFunctions()
+        table.insert( declared_funcs, MODIFIER_PROPERTY_INCOMING_PHYSICAL_DAMAGE_CONSTANT )
+        table.insert( declared_funcs, MODIFIER_PROPERTY_INCOMING_SPELL_DAMAGE_CONSTANT )
+        table.insert( declared_funcs, MODIFIER_PROPERTY_INCOMING_DAMAGE_CONSTANT )
+        return declared_funcs
+    end
+    mod.GetModifierIncomingPhysicalDamageConstant = self.GetModifierIncomingPhysicalDamageConstant
+    mod.GetModifierIncomingSpellDamageConstant = self.GetModifierIncomingSpellDamageConstant
+    mod.GetModifierIncomingDamageConstant = self.GetModifierIncomingDamageConstant
+
+    mod.HandleCustomTransmitterData = function(self, data) for k,v in pairs(data) do self[k] = v end end
+
+    -- add the setup to OnCreated()
+    if mod.OnCreated ~= nil then
+        mod.__OldOnCreated = mod.OnCreated else mod.__OldOnCreated = function() end
+    end
+    mod.OnCreated = function(self, kv)
+        self:__OldOnCreated(kv)
+        if IsServer() then CustomBarriers:__SetupBarrierModifier(self) end
+    end
+
+    -- append a client update to OnRefresh()
+    if mod.OnRefresh ~= nil then
+        mod.__OldOnRefresh = mod.OnRefresh else mod.__OldOnRefresh = function(self) return end
+    end
+    mod.OnRefresh = function(self, kv)
+        self:__OldOnRefresh(kv)
+        self:OnCreated(kv)
+        if IsServer() then self:__BarrierUpdate() end
+    end
+
+    -- check if they have made a damage filter
+    if mod.OnBarrierDamagedFilter == nil then mod.OnBarrierDamagedFilter = function(self) return true end end
+
+    -- new functions that can just be copied over, respect tweaks
+    local general_funcs = {
+        "__IsBarrier",
+        "IsBarrierFor",
+        "SetBarrierType",
+        --"GetBarrierType",
+        "SetBarrierMaxHealth",
+        --"GetBarrierMaxHealth",
+        "SetBarrierHealth",
+        "GetBarrierHealth",
+        "SetBarrierInitialHealth",
+        "GetBarrierInitialHealth",
+        "IsPersistent",
+        "ShowOnZeroHP",
+        "__BarrierUpdate",
+        "__DoBarrierBlock",
+        "__GetBarrierOptions",
+    }
+    for _,func in ipairs(general_funcs) do if mod[func] == nil then mod[func] = self[func] end end
+end
+
+function CustomBarriers:__SetupBarrierModifier(mod)
+
+    -- Missing data error handler
+    local error_msg = "CustomBarriers Error: Undeclared barrier initialisation properties!"
+    local missing_props = {}
+    if mod.GetBarrierType == nil and mod.__barrier_type == nil then table.insert(missing_props, "- Type") end
+    if mod.GetBarrierMaxHealth == nil and mod.__max_barrier_health == nil then table.insert(missing_props, "- Max Health") end
+    if #missing_props > 0 then
+        print("Missing Properties;")
+        for _,s in ipairs(missing_props) do print(s) end
+        return
+    end
+
+    -- setup the internal properties
+    if mod.GetBarrierType ~= nil then mod.__barrier_type = mod:GetBarrierType() end
+    mod.GetBarrierType = function(self) return self.__barrier_type end
+
+    if mod.GetBarrierMaxHealth ~= nil then mod.__max_barrier_health = mod:GetBarrierMaxHealth() end
+    mod.GetBarrierMaxHealth = function (self) return self.__max_barrier_health end
+
+    if mod.GetBarrierInitialHealth ~= nil then mod.__initial_barrier_health = mod:GetBarrierInitialHealth() end
+    mod.GetBarrierInitialHealth = function (self) return self.__initial_barrier_health end
+
+    mod.__current_barrier_health = mod.__initial_barrier_health
+
+    -- add the internal properties to the transmitter
+    if mod.__OldAddCustomTransmitterData == nil then
+        if mod.AddCustomTransmitterData ~= nil and mod:AddCustomTransmitterData() ~= nil then
+            mod.__OldAddCustomTransmitterData = mod.AddCustomTransmitterData
+        else mod.__OldAddCustomTransmitterData = function(self) return {} end end
+        mod.AddCustomTransmitterData = function(self)
+            local transmit_data = self:__OldAddCustomTransmitterData()
+            transmit_data.__barrier_type = mod.__barrier_type
+            transmit_data.__max_barrier_health = mod.__max_barrier_health
+            transmit_data.__current_barrier_health = mod.__current_barrier_health
+            transmit_data.__initial_barrier_health = mod.__initial_barrier_health
+            return transmit_data
+        end
+    end
+
+    -- add the options
+    mod:__GetBarrierOptions()
+
+    -- send the new data to the client
+    mod:SetHasCustomTransmitterData(true)
+end
+
+-- generic handler for when the barrier values are changed
+function CustomBarriers:__BarrierUpdate()
+    if self.__current_barrier_health == nil then self.__current_barrier_health = 1 end
+
+    if not self:IsPersistent() then
+        if self.__current_barrier_health <= 0 then return self:Destroy() end
+    else self.__current_barrier_health = math.max(0, self.__current_barrier_health) end
+
+    if self.__max_barrier_health ~= nil then
+        self.__current_barrier_health = math.min( self.__current_barrier_health, self.__max_barrier_health )
+    end
+
+    self:SendBuffRefreshToClients()
+end
+
+-- set / get barrier type
+function CustomBarriers:GetBarrierType() return DAMAGE_TYPE_ALL end
+function CustomBarriers:SetBarrierType(dmg_type)
+    self.__barrier_type = dmg_type
+    self:__BarrierUpdate()
+end
+
+-- destroy on 0 hp, show on 0 hp
+function CustomBarriers:IsPersistent() return false end
+function CustomBarriers:ShowOnZeroHP() return false end
+
+function CustomBarriers:__IsBarrier()
+    if not self:ShowOnZeroHP() and self.__current_barrier_health <= 0 then return false else return true end
+end
+
+-- compare the damage type to what the respective barrier blocks
+function CustomBarriers:IsBarrierFor(dmg_type)
+    if self:IsPersistent() then
+        if self.__current_barrier_health <= 0 and not self:ShowOnZeroHP() then
+            return false
+        end
+    end
+
+    local b = self.__barrier_type
+    if b == dmg_type then return true end
+    if IsClient() then return false end
+
+    if b == DAMAGE_TYPE_PURE or b == DAMAGE_TYPE_ALL then
+        local not_pure = (dmg_type == DAMAGE_TYPE_PHYSICAL or dmg_type == DAMAGE_TYPE_MAGICAL)
+        if self.ALL_BARRIER_ONLY_BLOCKS_PURE and not_pure then return false end
+        return true
+    end
+
+    return false
+end
+
+-- set / get barrier max health
+function CustomBarriers:SetBarrierMaxHealth(amount)
+    self.__max_barrier_health = math.ceil(amount)
+    self:__BarrierUpdate()
+end
+function CustomBarriers:GetBarrierMaxHealth() return self.__max_barrier_health end
+
+-- set / get barrier health
+function CustomBarriers:GetBarrierHealth() return self.__current_barrier_health end
+function CustomBarriers:SetBarrierHealth(amount)
+    self.__current_barrier_health = math.ceil(amount)
+    self:__BarrierUpdate()
+end
+function CustomBarriers:GetBarrierInitialHealth() return self.__initial_barrier_health or self.__max_barrier_health end
+function CustomBarriers:SetBarrierInitialHealth(amount) self.__initial_barrier_health = amount end
+
+-- functions for handling the damage block
+function CustomBarriers:GetModifierIncomingPhysicalDamageConstant(keys) return self:__DoBarrierBlock(1, keys) end
+function CustomBarriers:GetModifierIncomingSpellDamageConstant(keys) return self:__DoBarrierBlock(2, keys) end
+function CustomBarriers:GetModifierIncomingDamageConstant(keys) return self:__DoBarrierBlock(4, keys) end
+
+function CustomBarriers:__DoBarrierBlock(d, keys)
+    if IsClient() then
+
+        -- check and report hp on client
+        if not self:IsBarrierFor(d) then return end
+        if keys.report_max then return self.__max_barrier_health else return self.__current_barrier_health end
+    else
+
+        -- check damage on server
+        if keys.attacker == self:GetParent() then return 0 end
+        if not self:IsBarrierFor(keys.damage_type) then return 0 end
+
+        -- check if we want to block hp loss
+        if not self.ALL_BARRIER_BLOCK_HP_REMOVAL then
+            if bit.band(keys.damage_flags, DOTA_DAMAGE_FLAG_HPLOSS) == DOTA_DAMAGE_FLAG_HPLOSS then
+                return 0
+            end
+        end
+
+        -- call the filter
+        if not self:OnBarrierDamagedFilter(keys) then return keys.damage end
+    end
+
+    -- Don't block more than the barrier hp
+    local blocked_amount = math.min(keys.damage, self.__current_barrier_health)
+    self.__current_barrier_health = self.__current_barrier_health - blocked_amount
+    self:__BarrierUpdate()
+
+    -- block visual
+    if self.SHOW_BARRIER_BLOCK_OVERHEAD_ALERT and blocked_amount > 0 then
+        SendOverheadEventMessage(
+            self:GetParent():GetPlayerOwner(),
+            OVERHEAD_ALERT_BLOCK,
+            self:GetParent(),
+            blocked_amount,
+            keys.attacker:GetPlayerOwner()
+        )
+    end
+
+    return -blocked_amount
+end
+
+-- damage filter
+function CustomBarriers:OnBarrierDamagedFilter(keys) return true end
+
+-- yeah I'm cheating, shut up
+function CDOTA_Buff:IsBarrier() if self.__IsBarrier ~= nil then return self:__IsBarrier() else return false end end
+```
+
+:::
+
+### Creating a custom barrier
+
+```lua
+CustomBarriers:TurnModifierIntoBarrier( CDOTA_Buff )
+```
+
+This function does most of the heavy lifting, it will add all the necessary functions to your modifier and turn it into a barrier. This needs to be called **_after_** all your modifier functions have been declared. The modifier also needs to know what type of barrier it is, and how much max health it has.
+
+```lua title="Setting type and max health"
+-- You can either use the get functions to declare them
+function modifier:GetBarrierType()
+    return DAMAGE_TYPE
+end
+
+function modifier:GetBarrierMaxHealth()
+    return int
+end
+
+-- Or you can set them in the modifier's OnCreated()
+function modifier:OnCreated()
+    self:SetBarrierType( DAMAGE_TYPE )
+    self:SetBarrierMaxHealth( int )
+end
+```
+
+This is already enough to have a functional barrier of the type you want.
+
+### Library Functions
+
+These functions are added to the modifier when you call `CustomBarriers:TurnModifierIntoBarrier( CDOTA_Buff )`, they're not added into the `CDOTA_Buff` base class. `IsBarrier()` is the only one that is added to the `CDOTA_Buff` base class, so calling the others on a modifier you haven't turned into a barrier will cause an error.
+
+| Function Name                                                                      | Return                                                           | Description                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IsBarrier()                                                                        | bool                                                             | Returns true if the barrier is visible.                                                                                                                                                   |
+| IsBarrierFor( [DAMAGE_TYPES](https://moddota.com/api/#!/vscripts/DAMAGE_TYPES) )   | bool                                                             | Returns true if the damage type will be blocked by the barrier.                                                                                                                           |
+| SetBarrierType( [DAMAGE_TYPES](https://moddota.com/api/#!/vscripts/DAMAGE_TYPES) ) | _nil_                                                            | Sets the barrier to block the specified type of damage.                                                                                                                                   |
+| GetBarrierType()                                                                   | [DAMAGE_TYPES](https://moddota.com/api/#!/vscripts/DAMAGE_TYPES) | Returns what type of damage the barrier will block.                                                                                                                                       |
+| SetBarrierMaxHealth( int )                                                         | _nil_                                                            | Sets the barrier's max health.                                                                                                                                                            |
+| GetBarrierMaxHealth()                                                              | int                                                              | Gets the barrier's max health.                                                                                                                                                            |
+| SetBarrierHealth( int )                                                            | _nil_                                                            | Sets the barrier's current health.                                                                                                                                                        |
+| GetBarrierHealth()                                                                 | int                                                              | Gets the barrier's current health.                                                                                                                                                        |
+| SetBarrierInitialHealth( int )                                                     | _nil_                                                            | Sets the barrier's initial health.                                                                                                                                                        |
+| GetBarrierInitialHealth()                                                          | int                                                              | Gets the barrier's initial health.                                                                                                                                                        |
+| IsPersistent()                                                                     | bool                                                             | Whether the modifier will be destroyed when the barrier's health reaches 0. Defaults to `false`.                                                                                          |
+| ShowOnZeroHP()                                                                     | bool                                                             | Whether the barrier bar is visible at 0 hp. Defaults to `false`.                                                                                                                          |
+| OnBarrierDamagedFilter( event )                                                    | bool                                                             | A filter for damage to the barrier. Return false if you want the unit to be damaged instead. Set the `event.damage` to 0 if you want no damage to be done at all. (Only called on server) |
+
+- `GetBarrierType()` and `SetBarrierType()` are designed to be used with the 3 main damage types; `Physical`, `Magical`, and `Pure`. `Pure` refers to the Universal barrier in this case.
+- `ShowOnZeroHP()` will only work if `IsPersistent()` is `true`.
+
+### Example of a library barrier
+
+Let's say we want to have a magic damage barrier that starts at 0, is always around, increases based on the magic damage we deal, and has a cap based on our max hp. Sounds very complex right? Let's see how we do.
+
+```lua
+modifier_magic_barrier = class({})
+
+-- We want to hide it when the hp is 0
+function modifier_magic_barrier:IsHidden()
+    return self:GetBarrierHealth() <= 0
+end
+
+function modifier_magic_barrier:IsPermanent()
+    return true
+end
+
+-- Make sure the modifier isn't destroyed when it's at 0 hp
+function modifier_magic_barrier:IsPersistent()
+    return true
+end
+
+-- We want a magic barrier
+function modifier_magic_barrier:GetBarrierType()
+    return DAMAGE_TYPE_MAGICAL
+end
+
+-- Declare the max barrier health as % of our max hp
+function modifier_magic_barrier:GetBarrierMaxHealth()
+    return math.ceil(self:GetParent():GetMaxHealth() * self.barrier_cap)
+end
+
+-- Start at 0 barrier hp
+function modifier_magic_barrier:GetBarrierInitialHealth()
+    return 0
+end
+
+-- Here we want to just declare some properties to make our life easier
+function modifier_magic_barrier:OnCreated()
+    self.barrier_cap = self:GetAbility():GetSpecialValueFor("barrier_cap")/100
+
+    if IsServer() then
+        self.barrier_conversion = self:GetAbility():GetSpecialValueFor("barrier_conversion")/100
+        self:StartIntervalThink(0.2)
+    end
+end
+
+-- We need to keep track of our max hp somehow, if we dont then it will only update when we take damage
+function modifier_magic_barrier:OnIntervalThink()
+    self:SetBarrierMaxHealth( math.ceil(self:GetParent():GetMaxHealth() * self.barrier_cap) )
+end
+
+-- We want to know when something takes damage to check if it's from us
+function modifier_magic_barrier:DeclareFunctions()
+    return {
+        MODIFIER_EVENT_ON_TAKEDAMAGE
+    }
+end
+
+-- Here we check when we do magic damage
+function modifier_magic_barrier:OnTakeDamage( event )
+    if IsClient() then return end -- don't need the client here
+
+    if keys.unit == self:GetParent() or keys.attacker ~= self:GetParent() then
+        return -- we only care about us doing damage
+    end
+
+    if keys.damage_type ~= DAMAGE_TYPE_MAGICAL then return end -- we only want magic damage
+
+    -- now we can turn a portion of the magic damage we've done into our barrier health!
+    local amount = keys.damage * self.barrier_conversion
+
+    -- Set the health directly, but don't exceed the max health
+    self:SetBarrierHealth( math.min( self:GetBarrierHealth() + amount, self:GetBarrierMaxHealth() ) )
+end
+
+-- Now that we've created our modifier, we can tell the library to turn it into a barrier!
+CustomBarriers:TurnModifierIntoBarrier( modifier_magic_barrier )
+```
+
+### Compact Example
+
+Let's take the [Simple Example](#simple-example) from earlier and remake it using the Library.
+
+```lua title="Simple Universal Barrier (Lib Edition)"
+modifier_custom_all_barrier = class({})
+function modifier_custom_all_barrier:GetBarrierType() return DAMAGE_TYPE_PURE end
+function modifier_custom_all_barrier:GetBarrierMaxHealth() return 100 end
+CustomBarriers:TurnModifierIntoBarrier( modifier_custom_all_barrier )
+```
+
+This still functions the exact same as the previous version, all of the barrier specific code is just being handled by `CustomBarriers` instead.

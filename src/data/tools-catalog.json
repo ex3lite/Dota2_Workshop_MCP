@@ -1,0 +1,35 @@
+{
+  "description": "Curated catalog of Dota 2 custom-game development tools, libraries and references.",
+  "tools": [
+    { "name": "Workshop Tools (DLC)", "category": "official", "description": "Free Valve DLC that unlocks all Source 2 authoring tools for Dota 2. Required for any custom game. Launch via Steam > Dota 2 > 'Launch Dota 2 - Tools', or dota2.exe -tools.", "url": "https://developer.valvesoftware.com/wiki/Dota_2_Workshop_Tools" },
+    { "name": "Hammer", "category": "official", "description": "Source 2 level/map editor. Build and compile custom maps (.vmap -> .vpk).", "url": "https://developer.valvesoftware.com/wiki/Hammer" },
+    { "name": "Particle Editor (PET)", "category": "official", "description": "Author and edit particle systems (.vpcf).", "url": "https://developer.valvesoftware.com/wiki/Source_2_Particle_Editor" },
+    { "name": "Material Editor (MET)", "category": "official", "description": "Create and edit materials (.vmat).", "url": "https://developer.valvesoftware.com/wiki/Material_Editor" },
+    { "name": "ModelDoc Editor", "category": "official", "description": "Compile and configure models (.vmdl) with attachments, animations, hitboxes.", "url": "https://developer.valvesoftware.com/wiki/ModelDoc" },
+    { "name": "Asset Browser", "category": "official", "description": "Browse, import and compile addon content assets.", "url": "https://developer.valvesoftware.com/wiki/Asset_Browser" },
+    { "name": "VConsole2", "category": "official", "description": "Source 2 developer console (game/bin/win64/vconsole2.exe). Attaches to a -tools game; live console output and commands. This MCP speaks its protocol for the debug-loop tools.", "url": "https://www.source2.wiki/EngineTools/VConsole" },
+    { "name": "resourcecompiler.exe", "category": "official", "description": "CLI compiler that turns content/ source assets into compiled game/ files. Used by the addon_compile_content MCP tool.", "url": "https://www.source2.wiki/EngineTools/ResourceCompiler" },
+
+    { "name": "TypeScript Addon Template", "category": "template", "description": "The canonical ModDota starter: TypeScript -> Lua (tstl) for vscripts + TypeScript for Panorama, with build/launch scripts. The target this MCP is template-aware for.", "url": "https://github.com/ModDota/TypeScriptAddonTemplate", "package": "(GitHub template)" },
+
+    { "name": "@moddota/dota-lua-types", "category": "library", "description": "TypeScript declarations for the Dota 2 VScript (Lua) API, used by typescript-to-lua projects.", "url": "https://github.com/ModDota/TypeScriptDeclarations", "package": "@moddota/dota-lua-types" },
+    { "name": "@moddota/panorama-types", "category": "library", "description": "TypeScript declarations for the Panorama JS API. This MCP bundles a searchable form of these as the Panorama API tools.", "url": "https://github.com/ModDota/TypeScriptDeclarations", "package": "@moddota/panorama-types" },
+    { "name": "@moddota/dota-data", "category": "library", "description": "Auto-generated machine-readable dumps of the Dota 2 VScript API, enums, and Panorama data. This MCP bundles its api.json/enums.json for the lua_api tools.", "url": "https://github.com/ModDota/dota-data", "package": "@moddota/dota-data" },
+    { "name": "@moddota/find-steam-app", "category": "library", "description": "Locate an installed Steam app (e.g. 'dota 2 beta') cross-platform. Used by the TS template's install/launch scripts.", "url": "https://github.com/ModDota/find-steam-app", "package": "@moddota/find-steam-app" },
+    { "name": "AbilityLuaSpellLibrary", "category": "library", "description": "Community library of ready-made Lua ability/modifier implementations to learn from and reuse.", "url": "https://github.com/ModDota/AbilityLuaSpellLibrary" },
+    { "name": "typescript-to-lua (tstl)", "category": "library", "description": "Transpiles TypeScript to Lua. The vscripts build step in the TS template.", "url": "https://typescripttolua.github.io/", "package": "typescript-to-lua" },
+
+    { "name": "D2VDump", "category": "community", "description": "Dota 2 server VScript API dumper — the upstream source of the API data.", "url": "https://github.com/ModDota/D2VDump" },
+    { "name": "ModDota/API", "category": "community", "description": "Documents the interfaces relevant to Dota 2 modding; renders at docs.moddota.com.", "url": "https://github.com/ModDota/API" },
+    { "name": "Dota 2 ModKit", "category": "community", "description": "GUI helper for KV tooling, localization generation, VPK packing and more.", "url": "https://github.com/Myll/Dota-2-ModKit" },
+    { "name": "dota-tutorial", "category": "community", "description": "A full custom-game tutorial project — a large real-world TypeScript addon to study.", "url": "https://github.com/ModDota/dota-tutorial" },
+    { "name": "Dota2AIFramework", "category": "community", "description": "Framework for building and running Dota 2 AI competitions.", "url": "https://github.com/ModDota/Dota2AIFramework" },
+
+    { "name": "moddota.com", "category": "reference", "description": "Community guides for scripting, abilities, panorama, assets and tools. This MCP bundles these articles for the docs_* tools.", "url": "https://moddota.com/" },
+    { "name": "docs.moddota.com", "category": "reference", "description": "Auto-generated API documentation (VScript + Panorama).", "url": "https://docs.moddota.com/" },
+    { "name": "Valve Developer Community (Dota 2)", "category": "reference", "description": "Official Source 2 / Dota 2 Workshop Tools wiki.", "url": "https://developer.valvesoftware.com/wiki/Dota_2_Workshop_Tools" },
+    { "name": "source2.wiki", "category": "reference", "description": "Community-maintained Source 2 engine-tools reference (ResourceCompiler, VConsole, etc.).", "url": "https://www.source2.wiki/" },
+
+    { "name": "dota2-workshop-mcp", "category": "this", "description": "This MCP server: KeyValues tooling, scaffolding, VScript + Panorama API search, bundled docs, and a VConsole2 debug loop.", "url": "https://github.com/ex3lite/Dota2_Workshop_MCP" }
+  ]
+}

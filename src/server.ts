@@ -5,7 +5,9 @@ import { registerApiTools } from "./tools/api.tools.js";
 import { registerScaffoldTools } from "./tools/scaffold.tools.js";
 import { registerBuildTools } from "./tools/build.tools.js";
 import { registerDebugTools } from "./tools/debug.tools.js";
+import { registerDocsTools } from "./tools/docs.tools.js";
 import { apiStats } from "./api/search.js";
+import { panoramaStats } from "./api/panorama.js";
 
 export const SERVER_INFO = { name: "dota2-workshop-mcp", version: "0.1.0" } as const;
 
@@ -18,6 +20,7 @@ export function createServer(): McpServer {
   registerScaffoldTools(server);
   registerBuildTools(server);
   registerDebugTools(server);
+  registerDocsTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(
@@ -25,8 +28,8 @@ export function createServer(): McpServer {
     "dota://api/info",
     { title: "Dota VScript API (bundled)", description: "Counts + generation time of the bundled VScript API data.", mimeType: "application/json" },
     async (uri) => {
-      const stats = await apiStats();
-      return { contents: [{ uri: uri.href, text: JSON.stringify(stats, null, 2) }] };
+      const [lua, panorama] = await Promise.all([apiStats(), panoramaStats()]);
+      return { contents: [{ uri: uri.href, text: JSON.stringify({ vscript: lua, panorama }, null, 2) }] };
     },
   );
 

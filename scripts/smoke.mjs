@@ -61,6 +61,7 @@ async function main() {
     "lua_api_get", "scaffold_ability", "scaffold_modifier", "addon_build", "addon_launch_tools",
     "dota_send_console_command", "dota_read_console_log", "dota_reload_scripts",
     "dota_restart_game", "dota_dev_cycle",
+    "docs_search", "docs_get", "docs_list", "panorama_api_search", "panorama_api_get", "tools_catalog",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -151,6 +152,27 @@ async function main() {
   const restartDry = await client.callTool({ name: "dota_restart_game", arguments: { map: "dota", vconPort: 29999, dryRun: true } });
   const rt = textOf(restartDry);
   check("restart_game dryRun has taskkill + launch + vconport", /taskkill/i.test(rt) && rt.includes("dota2.exe") && rt.includes("-vconport"));
+
+  // 10) docs + panorama + tools catalog
+  const docsList = await client.callTool({ name: "docs_list", arguments: {} });
+  check("docs_list shows categories", /abilities|panorama/.test(textOf(docsList)));
+  const docsSearch = await client.callTool({ name: "docs_search", arguments: { query: "modifier" } });
+  check("docs_search finds results", !docsSearch.isError && textOf(docsSearch).length > 20);
+  const gs = await client.callTool({ name: "docs_get", arguments: { id: "getting-started" } });
+  check("docs_get returns a page", !gs.isError && /Getting Started/i.test(textOf(gs)));
+
+  const panSearch = await client.callTool({ name: "panorama_api_search", arguments: { query: "GameEvents" } });
+  check("panorama_api_search finds GameEvents", textOf(panSearch).includes("GameEvents"));
+  const panGet = await client.callTool({ name: "panorama_api_get", arguments: { name: "GameEvents" } });
+  check("panorama_api_get GameEvents lists Subscribe", textOf(panGet).includes("Subscribe"));
+  const panDollar = await client.callTool({ name: "panorama_api_get", arguments: { name: "$" } });
+  check("panorama_api_get $ resolves to its interface members", /members of/i.test(textOf(panDollar)) && textOf(panDollar).includes("Msg"));
+  check("panorama_api_get $ includes the (selector) call signature", /selector/.test(textOf(panDollar)));
+  const panLabel = await client.callTool({ name: "panorama_api_get", arguments: { name: "LabelPanel" } });
+  check("panorama LabelPanel includes inherited members", /\(from /.test(textOf(panLabel)) && /members \((\d{2,})\)/.test(textOf(panLabel)));
+
+  const cat = await client.callTool({ name: "tools_catalog", arguments: { category: "official" } });
+  check("tools_catalog official lists VConsole/Hammer", /VConsole|Hammer/.test(textOf(cat)));
 
   await client.close();
   await rm(tmp, { recursive: true, force: true });

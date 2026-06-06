@@ -11,8 +11,9 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: early but working — **28 tools** across 6 areas, end-to-end tested, including a live debug
-> loop driven over the **VConsole2** protocol (hot-reload, console commands, live output, restart).
+> Status: early but working — **34 tools** across 7 areas, end-to-end tested. Includes a live debug
+> loop over the **VConsole2** protocol (hot-reload, console commands, live output, restart) and a
+> bundled, searchable copy of the VScript API, the Panorama JS API, and the ModDota guides — all offline.
 
 ## Features
 
@@ -24,9 +25,15 @@ fallback for non-tstl addons.
 | **VScript API** | `lua_api_search`, `lua_api_get`, `lua_api_class_methods` |
 | **Build & launch** | `addon_build`, `addon_compile_content`, `addon_launch_tools`, `addon_launch_custom_game`, `addon_link` |
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle` |
+| **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 
-The VScript API (97 classes, 242 globals, 72 enums) is bundled from
-[@moddota/dota-data](https://github.com/ModDota/dota-data) so search works offline.
+Everything is bundled so search works **offline**:
+- VScript (Lua) API — 97 classes / 242 globals / 72 enums, from [@moddota/dota-data](https://github.com/ModDota/dota-data).
+- Panorama JS API — 62 interfaces / ~880 members / 18 globals, from [@moddota/panorama-types](https://github.com/ModDota/TypeScriptDeclarations).
+- 83 ModDota guide articles (scripting, abilities, modifiers, units, panorama, assets, tools), from [moddota.com](https://moddota.com).
+- A curated catalog of Dota 2 modding tools, libraries and references.
+
+Refresh the bundled data anytime with `npm run build:data` (re-fetches all of the above).
 
 ## Requirements
 
@@ -40,7 +47,7 @@ The VScript API (97 classes, 242 globals, 72 enums) is bundled from
 git clone https://github.com/ex3lite/Dota2_Workshop_MCP.git
 cd Dota2_Workshop_MCP
 npm install        # also builds via the prepare script
-npm run build:api  # (optional) refresh the bundled VScript API from ModDota
+npm run build:data # (optional) refresh bundled VScript API + Panorama API + ModDota guides
 ```
 
 `npm install` runs `npm run build`, producing `dist/index.js` (the server entry point).
@@ -112,6 +119,17 @@ What hot-reloads vs needs a restart:
 
 > Tip: the ModDota template uses `Dynamic_Wrap`/`GameRules.Addon.Reload()` so reloaded code is
 > picked up — keep event listeners wrapped for `script_reload` to take effect.
+
+## Built-in references (offline)
+
+No need to leave the editor to look things up:
+
+- **`lua_api_search` / `lua_api_get`** — the VScript (Lua) server API.
+- **`panorama_api_search` / `panorama_api_get`** — the Panorama JS API. Globals resolve to their
+  interface: `panorama_api_get $`, `panorama_api_get GameEvents`, `panorama_api_get Players.GetLocalPlayer`.
+- **`docs_search` / `docs_get` / `docs_list`** — the ModDota guides. Browse with `docs_list`, search
+  with `docs_search modifier`, read with `docs_get abilities/ability-keyvalues`.
+- **`tools_catalog`** — the curated list of tools/libraries/references (filter by category or query).
 
 ## Notes & limitations
 
