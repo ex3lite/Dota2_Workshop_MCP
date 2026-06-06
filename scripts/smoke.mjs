@@ -62,6 +62,7 @@ async function main() {
     "dota_send_console_command", "dota_read_console_log", "dota_reload_scripts",
     "dota_restart_game", "dota_dev_cycle", "dota_screenshot", "dota_watch_errors",
     "docs_search", "docs_get", "docs_list", "panorama_api_search", "panorama_api_get", "tools_catalog",
+    "map_create", "map_add_entity", "map_to_text", "map_from_text", "map_compile", "map_list",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -177,6 +178,12 @@ async function main() {
 
   const cat = await client.callTool({ name: "tools_catalog", arguments: { category: "official" } });
   check("tools_catalog official lists VConsole/Hammer", /VConsole|Hammer/.test(textOf(cat)));
+
+  // 11) map tools — non-destructive checks (real map create/compile is covered by live tests)
+  const mapCompileDry = await client.callTool({ name: "map_compile", arguments: { name: "somemap", dryRun: true } });
+  check("map_compile dryRun shows resourcecompiler + game/dota", /resourcecompiler/i.test(textOf(mapCompileDry)) && /game[\\/]dota/i.test(textOf(mapCompileDry)));
+  const mapList = await client.callTool({ name: "map_list", arguments: {} });
+  check("map_list runs", !mapList.isError);
 
   await client.close();
   await rm(tmp, { recursive: true, force: true });

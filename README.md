@@ -11,7 +11,8 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: early but working — **36 tools** across 7 areas, end-to-end tested. The live debug loop runs
+> Status: early but working — **42 tools** across 8 areas, end-to-end tested. It can even build & compile
+> playable maps programmatically (verified: generate vmap → compile → .vpk). The live debug loop runs
 > over the **VConsole2** protocol (verified against a running client: connect, send commands, read live
 > output, hot-reload, restart, screenshot, error-watch) and a bundled, searchable copy of the VScript
 > API, the Panorama JS API, and the ModDota guides ships for offline use.
@@ -27,6 +28,7 @@ fallback for non-tstl addons.
 | **Build & launch** | `addon_build`, `addon_compile_content`, `addon_launch_tools`, `addon_launch_custom_game`, `addon_link` |
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors` |
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
+| **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
 
 Everything is bundled so search works **offline**:
 - VScript (Lua) API — 97 classes / 242 globals / 72 enums, from [@moddota/dota-data](https://github.com/ModDota/dota-data).
@@ -133,6 +135,26 @@ No need to leave the editor to look things up:
 - **`docs_search` / `docs_get` / `docs_list`** — the ModDota guides. Browse with `docs_list`, search
   with `docs_search modifier`, read with `docs_get abilities/ability-keyvalues`.
 - **`tools_catalog`** — the curated list of tools/libraries/references (filter by category or query).
+
+## Building maps
+
+`.vmap` files are DMX documents. The MCP edits them as text via Valve's `dmxconvert.exe`
+(binary ↔ keyvalues2), then compiles with `resourcecompiler` (`-game <dota>/game/dota`) into a
+playable `.vpk` — a pipeline verified end to end.
+
+- **`map_create`** — clone the official template map (ground + lighting + team spawns) into your
+  addon and register it in `addoninfo.txt`. Pass `compile: true` to produce the `.vpk` immediately.
+- **`map_add_entity`** — place any entity (`info_player_start_*`, `npc_dota_spawner`, `env_*`,
+  `prop_dynamic`, `point_*`, …) with origin/angles/properties.
+- **`map_to_text` / `map_from_text`** — read/write the full vmap DMX text for arbitrary edits.
+- **`map_compile`** — compile a map's `.vmap` → `.vpk`.
+- **`map_list`** — list maps with source/compiled status.
+
+Then launch it: `addon_launch_custom_game map="<name>"`.
+
+> Limitation: bespoke **geometry** (terrain/brushwork — the `CDmePolygonMesh` half-edge data) is
+> authored in **Hammer**. The MCP builds maps by cloning a working base and placing entities; it
+> doesn't sculpt arbitrary meshes from scratch.
 
 ## Notes & limitations
 

@@ -22,7 +22,10 @@ export interface DotaPaths {
   vconsoleExe: string;
   gameDotaAddons: string;
   contentDotaAddons: string;
+  /** The folder containing gameinfo.gi (game/dota) — the correct -game target for resourcecompiler. */
+  dotaGameDir: string;
   gameInfo: string;
+  dmxconvertExe: string;
   screenshotsDir: string;
   source: string; // how the root was found
 }
@@ -39,7 +42,9 @@ function derive(root: string, source: string): DotaPaths {
     vconsoleExe: join(binWin64, "vconsole2.exe"),
     gameDotaAddons: join(root, "game", "dota_addons"),
     contentDotaAddons: join(root, "content", "dota_addons"),
+    dotaGameDir: join(root, "game", "dota"),
     gameInfo: join(root, "game", "dota", "gameinfo.gi"),
+    dmxconvertExe: join(binWin64, "dmxconvert.exe"),
     screenshotsDir: join(root, "game", "dota", "screenshots"),
     source,
   };

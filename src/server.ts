@@ -6,6 +6,7 @@ import { registerScaffoldTools } from "./tools/scaffold.tools.js";
 import { registerBuildTools } from "./tools/build.tools.js";
 import { registerDebugTools } from "./tools/debug.tools.js";
 import { registerDocsTools } from "./tools/docs.tools.js";
+import { registerMapTools } from "./tools/map.tools.js";
 import { apiStats } from "./api/search.js";
 import { panoramaStats } from "./api/panorama.js";
 
@@ -21,6 +22,7 @@ export function createServer(): McpServer {
   registerBuildTools(server);
   registerDebugTools(server);
   registerDocsTools(server);
+  registerMapTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(

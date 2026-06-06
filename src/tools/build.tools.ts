@@ -66,8 +66,9 @@ export function registerBuildTools(server: McpServer) {
       const dota = await requireDotaPaths();
       const { name } = await resolveAddonName(projectRoot, addon);
       const contentPath = join(dota.contentDotaAddons, name);
-      const gamePath = join(dota.gameDotaAddons, name);
-      const args = ["-v", "-nop4", "-i", join(contentPath, "*"), "-r", "-game", gamePath];
+      // -game must point at the folder containing gameinfo.gi (game/dota); the compiler
+      // maps the content/ path back to the addon automatically.
+      const args = ["-v", "-nop4", "-i", join(contentPath, "*"), "-r", "-game", dota.dotaGameDir];
       if (force) args.splice(2, 0, "-f");
       const cmd = `"${dota.resourceCompilerExe}" ${args.join(" ")}`;
       if (dryRun) return text(`[dry run]\n${cmd}`);
