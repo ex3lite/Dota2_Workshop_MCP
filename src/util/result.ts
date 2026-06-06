@@ -1,16 +1,27 @@
 // Helpers for building MCP tool results.
 
+export type ContentItem =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export interface ToolResult {
   // Index signature so this is assignable to the SDK's CallToolResult (which is
   // extensible via _meta and carries an index signature).
   [key: string]: unknown;
-  content: { type: "text"; text: string }[];
+  content: ContentItem[];
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
 
 export function text(message: string): ToolResult {
   return { content: [{ type: "text", text: message }] };
+}
+
+/** An image result (base64 data) with an optional text caption. */
+export function image(data: string, mimeType: string, caption?: string): ToolResult {
+  const content: ContentItem[] = [{ type: "image", data, mimeType }];
+  if (caption) content.unshift({ type: "text", text: caption });
+  return { content };
 }
 
 /** Structured result: returns both a text fallback and structuredContent. */

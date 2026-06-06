@@ -3,3 +3,7 @@ dist/
 *.log
 .DS_Store
 .env
+
+# local scratch
+.shot.png
+*.local.png

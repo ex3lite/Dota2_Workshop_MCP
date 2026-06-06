@@ -11,9 +11,10 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: early but working — **34 tools** across 7 areas, end-to-end tested. Includes a live debug
-> loop over the **VConsole2** protocol (hot-reload, console commands, live output, restart) and a
-> bundled, searchable copy of the VScript API, the Panorama JS API, and the ModDota guides — all offline.
+> Status: early but working — **36 tools** across 7 areas, end-to-end tested. The live debug loop runs
+> over the **VConsole2** protocol (verified against a running client: connect, send commands, read live
+> output, hot-reload, restart, screenshot, error-watch) and a bundled, searchable copy of the VScript
+> API, the Panorama JS API, and the ModDota guides ships for offline use.
 
 ## Features
 
@@ -24,7 +25,7 @@ fallback for non-tstl addons.
 | **Scaffolding** | `scaffold_ability`, `scaffold_modifier`, `scaffold_item`, `scaffold_unit`, `scaffold_hero`, `scaffold_panorama_panel` |
 | **VScript API** | `lua_api_search`, `lua_api_get`, `lua_api_class_methods` |
 | **Build & launch** | `addon_build`, `addon_compile_content`, `addon_launch_tools`, `addon_launch_custom_game`, `addon_link` |
-| **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle` |
+| **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors` |
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 
 Everything is bundled so search works **offline**:
@@ -106,7 +107,9 @@ The launch tools already pass `-tools` (and `-vconport`), so the channel is avai
 - **`dota_read_console_log`** — read recent live console output (with optional `grep`).
 - **`dota_reload_scripts`** — compile + `script_reload` (hot-reload Lua without relaunch).
 - **`dota_restart_game`** — `taskkill` + relaunch + reconnect (for changes that can't hot-reload).
-- **`dota_dev_cycle`** — one call: build, then pick the cheapest apply path.
+- **`dota_dev_cycle`** — one call: build, then pick the cheapest apply path (with `autoRestart` if a reload errors).
+- **`dota_screenshot`** — capture the running game (in-game `jpeg`, or OS window capture as a fallback).
+- **`dota_watch_errors`** — scan the live console for Lua/engine errors (script error, stack traceback, *.lua:NN, …).
 
 What hot-reloads vs needs a restart:
 

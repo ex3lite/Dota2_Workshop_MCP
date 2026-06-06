@@ -1,24 +1,65 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { readdir, stat, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { resolveProject } from "../config.js";
-import { requireDotaPaths } from "../dota/paths.js";
-import { getVConsole, defaultVconPort } from "../dota/vconsole.js";
+import { requireDotaPaths, DotaPaths } from "../dota/paths.js";
+import { getVConsole, defaultVconPort, ConsoleLine } from "../dota/vconsole.js";
 import { buildLaunchArgs } from "../dota/launch.js";
 import { run, spawnDetached, killProcess, npmCommand } from "../dota/process.js";
-import { json, text, error, guard, ToolResult } from "../util/result.js";
+import { ensureDir } from "../util/fsx.js";
+import { captureDotaWindowPng } from "../dota/capture.js";
+import { json, text, image, error, guard, ToolResult } from "../util/result.js";
 
 let sentinelCounter = 0;
 function nextSentinel(): string {
   return `MCP_SENTINEL_${++sentinelCounter}`;
 }
 
-function formatLines(lines: { channel: number; text: string }[]): string {
+function formatLines(lines: { text: string }[]): string {
   return lines.map((l) => l.text).join("\n");
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Patterns that indicate a Lua/engine error in console output.
+const ERROR_RE =
+  /(script error|stack traceback|attempt to (call|index|perform|concatenate)|assertion failed|lua runtime error|[^A-Za-z]Error:|\.lua:\d+:)/i;
+
+function findErrors(lines: ConsoleLine[]): string[] {
+  return lines.filter((l) => ERROR_RE.test(l.text)).map((l) => l.text);
 }
 
 const VCON_HINT =
   "Could not reach the VConsole channel. Launch the game in tools mode first (addon_launch_custom_game), " +
   "and make sure it was started with -tools (and matching -vconport if you overrode it).";
+
+/** Full relaunch helper shared by dota_restart_game and dota_dev_cycle. */
+async function restartGame(
+  dota: DotaPaths,
+  addon: string,
+  map: string,
+  port: number,
+  cheats: boolean,
+  reconnect: boolean,
+): Promise<{ pid?: number; command: string; killed: boolean; reconnected: boolean }> {
+  const args = buildLaunchArgs({ addon, map, insecure: true, dev: true, cheats, vconPort: port });
+  const command = `"${dota.dota2Exe}" ${args.join(" ")}`;
+  getVConsole(port).disconnect();
+  const kill = await killProcess("dota2.exe");
+  await sleep(1500); // let the OS release file locks
+  const { pid } = spawnDetached(dota.dota2Exe, args, dota.binWin64);
+  let reconnected = false;
+  if (reconnect) {
+    try {
+      await getVConsole(port).connectWithRetry(60_000, 1000);
+      reconnected = true;
+    } catch {
+      /* still loading */
+    }
+  }
+  return { pid, command, killed: kill.code === 0, reconnected };
+}
 
 export function registerDebugTools(server: McpServer) {
   server.registerTool(
@@ -132,26 +173,15 @@ export function registerDebugTools(server: McpServer) {
       const dota = await requireDotaPaths();
       const name = addon ?? (await resolveProject(projectRoot)).addonName;
       const port = vconPort ?? defaultVconPort();
-      const args = buildLaunchArgs({ addon: name, map, insecure: true, dev: true, cheats: cheats !== false, vconPort: port });
-      const cmd = `"${dota.dota2Exe}" ${args.join(" ")}`;
-      if (dryRun) return text(`[dry run]\ntaskkill /F /IM dota2.exe\n${cmd}`);
-
-      // Drop any stale socket, kill the running client, relaunch.
-      getVConsole(port).disconnect();
-      const kill = await killProcess("dota2.exe");
-      await new Promise((r) => setTimeout(r, 1500)); // let the OS release file locks
-      const { pid } = spawnDetached(dota.dota2Exe, args, dota.binWin64);
-
-      const report: Record<string, unknown> = { killed: kill.code === 0, pid, command: cmd, reconnected: false };
-      if (reconnect !== false) {
-        try {
-          await getVConsole(port).connectWithRetry(60_000, 1000);
-          report.reconnected = true;
-        } catch {
-          report.reconnectNote = "Relaunched, but VConsole not reachable yet — the game may still be loading.";
-        }
+      if (dryRun) {
+        const args = buildLaunchArgs({ addon: name, map, insecure: true, dev: true, cheats: cheats !== false, vconPort: port });
+        return text(`[dry run]\ntaskkill /F /IM dota2.exe\n"${dota.dota2Exe}" ${args.join(" ")}`);
       }
-      return json(report, `Restarting "${name}" on "${map}" (pid ${pid}). VConsole reconnected: ${report.reconnected}`);
+      const r = await restartGame(dota, name, map, port, cheats !== false, reconnect !== false);
+      return json(
+        { killed: r.killed, pid: r.pid, command: r.command, reconnected: r.reconnected },
+        `Restarting "${name}" on "${map}" (pid ${r.pid}). VConsole reconnected: ${r.reconnected}`,
+      );
     }),
   );
 
@@ -167,10 +197,11 @@ export function registerDebugTools(server: McpServer) {
         projectRoot: z.string().optional(),
         changeType: z.enum(["auto", "lua", "panorama", "kv", "structural"]).optional().describe("Default 'auto' (build + script_reload)."),
         map: z.string().optional().describe("Required when changeType is kv/structural (for the restart)."),
+        autoRestart: z.boolean().optional().describe("If reload produces console errors, do one full restart (needs map)."),
         vconPort: z.number().int().min(1).max(65535).optional(),
       },
     },
-    guard(async ({ projectRoot, changeType, map, vconPort }): Promise<ToolResult> => {
+    guard(async ({ projectRoot, changeType, map, autoRestart, vconPort }): Promise<ToolResult> => {
       const project = await resolveProject(projectRoot);
       const kind = changeType ?? "auto";
       const steps: string[] = [];
@@ -184,24 +215,14 @@ export function registerDebugTools(server: McpServer) {
         if (res.code !== 0) return error(`Build failed — aborting dev cycle.\n${res.stdout}\n${res.stderr}`.trim());
       }
 
-      // 2) Apply.
+      // 2) Apply: full restart for KV/structural changes.
       if (kind === "kv" || kind === "structural") {
         if (!map) return error(`changeType="${kind}" needs a full restart — pass a 'map' to relaunch on.`);
-        getVConsole(port).disconnect();
-        await killProcess("dota2.exe");
-        await new Promise((r) => setTimeout(r, 1500));
-        const args = buildLaunchArgs({ addon: project.addonName, map, insecure: true, dev: true, cheats: true, vconPort: port });
-        const { pid } = spawnDetached(dota.dota2Exe, args, dota.binWin64);
-        steps.push(`restart: relaunched (pid ${pid})`);
-        let reconnected = false;
-        try {
-          await getVConsole(port).connectWithRetry(60_000, 1000);
-          reconnected = true;
-        } catch {
-          /* still loading */
-        }
-        steps.push(`vconsole reconnected: ${reconnected}`);
-        return json({ kind, steps }, steps.join("\n"));
+        const r = await restartGame(dota, project.addonName, map, port, true, true);
+        steps.push(`restart: relaunched (pid ${r.pid}), vconsole reconnected: ${r.reconnected}`);
+        const errs = r.reconnected ? findErrors(getVConsole(port).recent(500)) : [];
+        if (errs.length) steps.push(`detected ${errs.length} error line(s) after restart`);
+        return json({ kind, steps, errors: errs }, `${steps.join("\n")}${errs.length ? "\n\nERRORS:\n" + errs.join("\n") : ""}`);
       }
 
       // lua / panorama / auto -> hot reload
@@ -214,7 +235,125 @@ export function registerDebugTools(server: McpServer) {
       const lines = await vc.sendAndCapture("script_reload", nextSentinel(), 2500);
       steps.push("script_reload sent");
       if (kind === "panorama" || kind === "auto") steps.push("panorama hot-reloads automatically after compile");
-      return json({ kind, steps, output: lines.map((l) => l.text) }, `${steps.join("\n")}\n\n${formatLines(lines)}`.trim());
+
+      let errs = findErrors(lines);
+      if (errs.length) {
+        steps.push(`detected ${errs.length} error line(s) after reload`);
+        if (autoRestart && map) {
+          const r = await restartGame(dota, project.addonName, map, port, true, true);
+          steps.push(`auto-restarted due to errors (pid ${r.pid}), reconnected: ${r.reconnected}`);
+          errs = r.reconnected ? findErrors(getVConsole(port).recent(500)) : errs;
+          steps.push(errs.length ? `still ${errs.length} error line(s) after restart` : "no errors after restart");
+        }
+      }
+      return json(
+        { kind, steps, errors: errs, output: lines.map((l) => l.text) },
+        `${steps.join("\n")}\n\n${formatLines(lines)}`.trim(),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "dota_screenshot",
+    {
+      title: "Capture a screenshot",
+      description:
+        "Screenshot the running game. method 'console' uses the in-game `jpeg` command (best when a map is " +
+        "rendering); 'window' captures the dota2 window via the OS (works in tools mode too, but a 3D viewport may " +
+        "be black); 'auto' (default) tries console then falls back to window. Returns the image.",
+      inputSchema: {
+        method: z.enum(["auto", "console", "window"]).optional(),
+        quality: z.number().int().min(1).max(100).optional().describe("JPEG quality for the console method (default 90)."),
+        vconPort: z.number().int().min(1).max(65535).optional(),
+      },
+    },
+    guard(async ({ method, quality, vconPort }): Promise<ToolResult> => {
+      const dota = await requireDotaPaths();
+      const mode = method ?? "auto";
+
+      // Console method: send `jpeg`, then read the new file from the screenshots dir.
+      if (mode === "console" || mode === "auto") {
+        const vc = getVConsole(vconPort);
+        let connected = vc.isConnected();
+        if (!connected) {
+          try {
+            await vc.connect();
+            connected = true;
+          } catch {
+            /* fall through to window capture in auto mode */
+          }
+        }
+        if (connected) {
+          const dir = dota.screenshotsDir;
+          await ensureDir(dir);
+          const before = new Set(await readdir(dir).catch(() => []));
+          const sinceMs = Date.now() - 1000;
+          vc.send(`jpeg ${quality ?? 90}`);
+          const isImg = (n: string) => /\.(jpe?g|png|tga)$/i.test(n);
+          let found: string | undefined;
+          for (let i = 0; i < 16 && !found; i++) {
+            await sleep(250);
+            for (const name of (await readdir(dir).catch(() => [])) as string[]) {
+              if (!isImg(name)) continue;
+              if (before.has(name)) {
+                const st = await stat(join(dir, name)).catch(() => null);
+                if (!st || st.mtimeMs < sinceMs) continue;
+              }
+              found = name;
+            }
+          }
+          if (found) {
+            await sleep(200);
+            const fp = join(dir, found);
+            const buf = await readFile(fp);
+            const mimeType = /\.png$/i.test(found) ? "image/png" : "image/jpeg";
+            return image(buf.toString("base64"), mimeType, `Screenshot (console): ${fp} (${Math.round(buf.length / 1024)} KB)`);
+          }
+          if (mode === "console") {
+            return error(`Sent 'jpeg' but no new screenshot appeared in ${dota.screenshotsDir}. Is a map rendering? Try method 'window'.`);
+          }
+        } else if (mode === "console") {
+          return error(VCON_HINT);
+        }
+      }
+
+      // Window method (and the auto fallback): capture the dota2 window via the OS.
+      const buf = await captureDotaWindowPng();
+      if (buf && buf.length) {
+        return image(buf.toString("base64"), "image/png", `Screenshot (window capture, ${Math.round(buf.length / 1024)} KB)`);
+      }
+      return error("Could not capture a screenshot. Is dota2.exe running with a visible window? (A 3D viewport may capture black via the OS method.)");
+    }),
+  );
+
+  server.registerTool(
+    "dota_watch_errors",
+    {
+      title: "Watch for console errors",
+      description:
+        "Scan the live console output for Lua/engine errors (script error, stack traceback, attempt to call/index, " +
+        "*.lua:NN, assertion failed). Optionally clear first and wait a window to catch errors triggered by an action.",
+      inputSchema: {
+        windowMs: z.number().int().min(0).max(60000).optional().describe("Wait this long collecting output before scanning (default 0)."),
+        clear: z.boolean().optional().describe("Clear the console buffer before watching (catch only new errors)."),
+        limit: z.number().int().positive().max(2000).optional(),
+        vconPort: z.number().int().min(1).max(65535).optional(),
+      },
+    },
+    guard(async ({ windowMs, clear, limit, vconPort }): Promise<ToolResult> => {
+      const vc = getVConsole(vconPort);
+      try {
+        if (!vc.isConnected()) await vc.connect();
+      } catch {
+        return error(VCON_HINT);
+      }
+      if (clear) vc.clearRing();
+      if (windowMs && windowMs > 0) await sleep(windowMs);
+      const errs = findErrors(vc.recent(limit ?? 500));
+      return json(
+        { count: errs.length, errors: errs },
+        errs.length ? `Found ${errs.length} error line(s):\n${errs.join("\n")}` : "No errors found in recent console output.",
+      );
     }),
   );
 }

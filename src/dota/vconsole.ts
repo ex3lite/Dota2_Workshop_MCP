@@ -14,7 +14,13 @@
 import net from "node:net";
 import { EventEmitter } from "node:events";
 
-const MAGIC = 0x00d20000;
+// Protocol version marker in each chunk header. Current Dota 2 release uses 0xD4
+// (the game rejects CMND chunks sent with the older 0xD2: "Message Version Mismatch").
+const MAGIC = 0x00d40000;
+
+// PRNT chunk body layout (verified against a live 0xD4 client): a 28-byte sub-header
+// (channel id at offset 0, color/flags follow) then the message text + a trailing NUL.
+const PRNT_TEXT_OFFSET = 28;
 
 export interface ConsoleLine {
   channel: number;
@@ -130,6 +136,11 @@ export class VConsoleClient extends EventEmitter {
     return this.ring.slice(-limit);
   }
 
+  /** Drop the buffered console output (e.g. to watch only output after an action). */
+  clearRing(): void {
+    this.ring.length = 0;
+  }
+
   /**
    * Send a command and capture the console output it produces, using a sentinel
    * echo to know when output has drained. Returns the lines printed in between.
@@ -169,9 +180,16 @@ export class VConsoleClient extends EventEmitter {
   private onData(d: Buffer): void {
     this.buf = Buffer.concat([this.buf, d]);
     while (this.buf.length >= 12) {
-      const type = this.buf.toString("ascii", 0, 4);
+      const magic = this.buf.readUInt32BE(4);
       const length = this.buf.readUInt16BE(8); // includes the 12-byte header
-      if (length < 12 || this.buf.length < length) break;
+      // Validate the header; if it doesn't look like a real chunk we've desynced
+      // (e.g. after an oversized chunk) — drop a byte and resync to the next header.
+      if (magic !== MAGIC || length < 12) {
+        this.buf = this.buf.subarray(1);
+        continue;
+      }
+      if (this.buf.length < length) break;
+      const type = this.buf.toString("ascii", 0, 4);
       const body = this.buf.subarray(12, length);
       this.buf = this.buf.subarray(length);
       this.handleChunk(type, body);
@@ -180,13 +198,12 @@ export class VConsoleClient extends EventEmitter {
 
   private handleChunk(type: string, body: Buffer): void {
     if (type !== "PRNT") return; // CHAN/CVAR/AINF etc. are ignored for now
-    // PRNT body: 16 bytes of sub-header (channel id + color/flags) then the message + NUL.
-    // Minimum well-formed body is 16 (+ trailing NUL); shorter is malformed.
-    if (body.length < 16) return;
+    // PRNT body: a PRNT_TEXT_OFFSET-byte sub-header (channel id at 0) then the message + NUL.
+    if (body.length < PRNT_TEXT_OFFSET) return;
     const channel = body.readUInt32LE(0);
     let end = body.length;
-    if (end > 16 && body[end - 1] === 0) end--; // strip trailing NUL
-    let text = body.subarray(16, end).toString("utf8").replace(/\r?\n$/, "");
+    if (end > PRNT_TEXT_OFFSET && body[end - 1] === 0) end--; // strip trailing NUL
+    let text = body.subarray(PRNT_TEXT_OFFSET, end).toString("utf8").replace(/\r?\n$/, "");
     if (text.length === 0) return;
     const line: ConsoleLine = { channel, text, at: Date.now() };
     this.ring.push(line);

@@ -60,7 +60,7 @@ async function main() {
     "dota_doctor", "addon_list", "kv_read", "kv_upsert_entry", "lua_api_search",
     "lua_api_get", "scaffold_ability", "scaffold_modifier", "addon_build", "addon_launch_tools",
     "dota_send_console_command", "dota_read_console_log", "dota_reload_scripts",
-    "dota_restart_game", "dota_dev_cycle",
+    "dota_restart_game", "dota_dev_cycle", "dota_screenshot", "dota_watch_errors",
     "docs_search", "docs_get", "docs_list", "panorama_api_search", "panorama_api_get", "tools_catalog",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
@@ -152,6 +152,10 @@ async function main() {
   const restartDry = await client.callTool({ name: "dota_restart_game", arguments: { map: "dota", vconPort: 29999, dryRun: true } });
   const rt = textOf(restartDry);
   check("restart_game dryRun has taskkill + launch + vconport", /taskkill/i.test(rt) && rt.includes("dota2.exe") && rt.includes("-vconport"));
+  const shotNoGame = await client.callTool({ name: "dota_screenshot", arguments: { method: "console", vconPort: 29999 } });
+  check("screenshot errors gracefully when no game", shotNoGame.isError === true && /VConsole|tools mode/i.test(textOf(shotNoGame)));
+  const watchNoGame = await client.callTool({ name: "dota_watch_errors", arguments: { vconPort: 29999 } });
+  check("watch_errors errors gracefully when no game", watchNoGame.isError === true);
 
   // 10) docs + panorama + tools catalog
   const docsList = await client.callTool({ name: "docs_list", arguments: {} });

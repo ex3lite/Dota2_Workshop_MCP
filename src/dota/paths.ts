@@ -23,6 +23,7 @@ export interface DotaPaths {
   gameDotaAddons: string;
   contentDotaAddons: string;
   gameInfo: string;
+  screenshotsDir: string;
   source: string; // how the root was found
 }
 
@@ -39,6 +40,7 @@ function derive(root: string, source: string): DotaPaths {
     gameDotaAddons: join(root, "game", "dota_addons"),
     contentDotaAddons: join(root, "content", "dota_addons"),
     gameInfo: join(root, "game", "dota", "gameinfo.gi"),
+    screenshotsDir: join(root, "game", "dota", "screenshots"),
     source,
   };
 }
