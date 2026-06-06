@@ -66,6 +66,7 @@ async function main() {
     "kv3_read", "soundevents_list", "soundevents_get", "soundevents_upsert",
     "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
     "scaffold_custom_event", "scaffold_net_table",
+    "entity_catalog", "map_terrain", "map_build", "map_preview", "map_tile_to_world",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -200,6 +201,10 @@ async function main() {
   check("custom event d.ts created", existsSync(join(tmp, "src", "common", "mcp_custom_events.d.ts")));
   const nt = await client.callTool({ name: "scaffold_net_table", arguments: { name: "scoreboard" } });
   check("scaffold_net_table writes decl + snippets", !nt.isError && /CustomNetTables/.test(textOf(nt)));
+
+  // 13b) entity catalog
+  const ec = await client.callTool({ name: "entity_catalog", arguments: { category: "path" } });
+  check("entity_catalog lists path entities (path_track)", /path_track/.test(textOf(ec)));
 
   // 14) VPK reader against the REAL Dota install (proves base-game access)
   const vf = await client.callTool({ name: "vpk_find", arguments: { query: "scripts/npc/npc_heroes", limit: 5 } });

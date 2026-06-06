@@ -1,0 +1,47 @@
+{
+  "description": "Curated catalog of Dota 2 map entity classnames + their key keyvalues, harvested from real addon maps. Use with map_add_entity / map_build.",
+  "entities": [
+    { "name": "info_player_start_goodguys", "category": "spawn", "purpose": "Radiant player/hero spawn point.", "keyValues": "(position only)" },
+    { "name": "info_player_start_badguys", "category": "spawn", "purpose": "Dire player/hero spawn point.", "keyValues": "(position only)" },
+    { "name": "info_player_start_dota", "category": "spawn", "purpose": "Generic Dota player start.", "keyValues": "(position only)" },
+    { "name": "info_courier_spawn_radiant", "category": "spawn", "purpose": "Radiant courier spawn.", "keyValues": "(position only)" },
+    { "name": "info_courier_spawn_dire", "category": "spawn", "purpose": "Dire courier spawn.", "keyValues": "(position only)" },
+
+    { "name": "npc_dota_scripted_spawner", "category": "spawn", "purpose": "Spawns NPCs that walk a waypoint path (native TD/lane mechanic).", "keyValues": "targetname, CustomNPCName, NPCType, NPCFirstWaypoint (name of first path_track), teamnumber, vscripts" },
+    { "name": "info_target", "category": "marker", "purpose": "Generic named point marker (great as a waypoint/anchor read from vscript).", "keyValues": "targetname" },
+    { "name": "path_track", "category": "path", "purpose": "Waypoint node; chains to the next via 'target'. Used by scripted spawners / movement.", "keyValues": "targetname, target (next node name), speed, radius, orientationtype" },
+    { "name": "path_corner", "category": "path", "purpose": "Older waypoint node; chains via 'target'.", "keyValues": "targetname, target, speed, wait" },
+
+    { "name": "trigger_multiple", "category": "trigger", "purpose": "Brush volume that fires repeatedly on touch (BRUSH entity — needs a volume; prefer vscript distance checks for generated maps).", "keyValues": "targetname, spawnflags, StartDisabled; outputs: OnTrigger, OnStartTouch, OnEndTouch" },
+    { "name": "trigger_once", "category": "trigger", "purpose": "Brush volume that fires once.", "keyValues": "targetname; output OnTrigger" },
+    { "name": "trigger_hero", "category": "trigger", "purpose": "Fires when a hero enters (Dota brush trigger).", "keyValues": "targetname; OnStartTouch/OnEndTouch" },
+    { "name": "trigger_shop", "category": "trigger", "purpose": "Defines a shop activation volume.", "keyValues": "targetname, shoptype" },
+
+    { "name": "logic_timer", "category": "logic", "purpose": "Fires OnTimer on an interval (e.g. spawn waves).", "keyValues": "targetname, RefireTime, UseRandomTime, StartDisabled; output OnTimer" },
+    { "name": "logic_relay", "category": "logic", "purpose": "Relays a trigger; good for grouping/decoupling I/O.", "keyValues": "targetname; input Trigger; output OnTrigger" },
+    { "name": "logic_auto", "category": "logic", "purpose": "Fires outputs at map spawn.", "keyValues": "output OnMapSpawn" },
+    { "name": "logic_case", "category": "logic", "purpose": "Branch among up to 16 cases.", "keyValues": "targetname, Case01..16" },
+    { "name": "point_template", "category": "logic", "purpose": "Groups entities to spawn at runtime from script.", "keyValues": "targetname, Template01..N" },
+
+    { "name": "env_global_light", "category": "light", "purpose": "Primary directional sun/sky light (required for proper lighting).", "keyValues": "color, ambientcolor1, texturename, enableshadows" },
+    { "name": "env_deferred_light", "category": "light", "purpose": "Local point/spot light.", "keyValues": "color, intensity, range, lightstyle" },
+    { "name": "env_fog_controller", "category": "env", "purpose": "Scene fog.", "keyValues": "fogcolor, fogstart, fogend, fogenable" },
+    { "name": "env_wind", "category": "env", "purpose": "Wind for foliage/particles.", "keyValues": "windspeed, winddir" },
+    { "name": "env_tonemap_controller", "category": "env", "purpose": "Exposure/tonemapping.", "keyValues": "(tonemap params)" },
+
+    { "name": "prop_static", "category": "prop", "purpose": "Non-moving baked prop (cheapest decoration).", "keyValues": "model, skin, solid" },
+    { "name": "prop_dynamic", "category": "prop", "purpose": "Movable/animatable prop.", "keyValues": "model, defaultanim, solid, targetname" },
+    { "name": "ent_dota_tree", "category": "prop", "purpose": "Destructible Dota tree (gameplay obstacle).", "keyValues": "(position; default tree model)" },
+    { "name": "ent_dota_fountain", "category": "dota", "purpose": "Team fountain (heal/regen zone).", "keyValues": "teamnumber" },
+    { "name": "ent_dota_shop", "category": "dota", "purpose": "Shop entity.", "keyValues": "shoptype, teamnumber" },
+
+    { "name": "info_particle_system", "category": "fx", "purpose": "Plays a particle system at a point.", "keyValues": "effect_name, start_active" },
+    { "name": "dota_item_rune_spawner_bounty", "category": "dota", "purpose": "Bounty rune spawn location.", "keyValues": "(position)" },
+    { "name": "npc_dota_base", "category": "dota", "purpose": "Generic base NPC placement.", "keyValues": "targetname" },
+
+    { "name": "ent_fow_blocker_node", "category": "vision", "purpose": "Blocks fog-of-war vision (cliffs/walls).", "keyValues": "(position/volume)" },
+    { "name": "ent_fow_revealer", "category": "vision", "purpose": "Reveals an area's fog of war.", "keyValues": "teamnumber, radius" },
+    { "name": "dota_minimap_boundary", "category": "world", "purpose": "Defines the playable minimap boundary corner.", "keyValues": "(position)" },
+    { "name": "world_bounds", "category": "world", "purpose": "World extents.", "keyValues": "(min/max)" }
+  ]
+}
