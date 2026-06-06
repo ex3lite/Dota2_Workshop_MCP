@@ -11,7 +11,7 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: working — **64 tools**, end-to-end tested. It can search the Workshop for custom games by
+> Status: working — **65 tools**, end-to-end tested. It can search the Workshop for custom games by
 > name and download them outside the client (SteamCMD) to study, generates whole playable maps from a spec
 > (terrain shaping via the Dota tile grid + entities + waypoint paths → compile → .vpk), previews them
 > top-down as an image without launching the game, edits KV1 + KV3 (soundevents/particles) data, reads
@@ -19,7 +19,10 @@ fallback for non-tstl addons.
 > tables, and can read/learn from any subscribed custom game's files. The live debug loop runs
 > over the **VConsole2** protocol (verified against a running client: connect, send commands, read live
 > output, hot-reload, restart, screenshot, error-watch) and a bundled, searchable copy of the VScript
-> API, the Panorama JS API, and the ModDota guides ships for offline use.
+> API, the Panorama JS API, the ModDota guides, and a knowledge base of design patterns distilled from
+> shipping games (`dota_patterns`) ships for offline use. `scaffold_td` emits both the canonical
+> waypoint tower-defense director and, with `maze: true`, a GemTD-style maze TD (grid A* pathfinder +
+> build validation that never lets players fully wall off the path).
 
 ## Features
 
@@ -31,7 +34,7 @@ fallback for non-tstl addons.
 | **VScript API** | `lua_api_search`, `lua_api_get`, `lua_api_class_methods` |
 | **Build & launch** | `addon_build`, `addon_compile_content`, `addon_launch_tools`, `addon_launch_custom_game`, `addon_link` |
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors` |
-| **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
+| **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `dota_patterns`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
 | **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog`, `scaffold_td` |
 | **Reference games** | `workshop_search`, `workshop_download`, `workshop_list`, `workshop_inspect`, `workshop_read` |

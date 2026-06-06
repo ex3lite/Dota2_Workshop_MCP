@@ -61,7 +61,7 @@ async function main() {
     "lua_api_get", "scaffold_ability", "scaffold_modifier", "addon_build", "addon_launch_tools",
     "dota_send_console_command", "dota_read_console_log", "dota_reload_scripts",
     "dota_restart_game", "dota_dev_cycle", "dota_screenshot", "dota_watch_errors",
-    "docs_search", "docs_get", "docs_list", "panorama_api_search", "panorama_api_get", "tools_catalog",
+    "docs_search", "docs_get", "docs_list", "dota_patterns", "panorama_api_search", "panorama_api_get", "tools_catalog",
     "map_create", "map_add_entity", "map_to_text", "map_from_text", "map_compile", "map_list",
     "kv3_read", "soundevents_list", "soundevents_get", "soundevents_upsert",
     "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
@@ -184,6 +184,12 @@ async function main() {
   const cat = await client.callTool({ name: "tools_catalog", arguments: { category: "official" } });
   check("tools_catalog official lists VConsole/Hammer", /VConsole|Hammer/.test(textOf(cat)));
 
+  // 10b) design patterns knowledge base
+  const patAll = await client.callTool({ name: "dota_patterns", arguments: {} });
+  check("dota_patterns lists patterns", !patAll.isError && /tower-defense|maze|backend/i.test(textOf(patAll)));
+  const patTd = await client.callTool({ name: "dota_patterns", arguments: { category: "tower-defense" } });
+  check("dota_patterns filters by category", !patTd.isError && /Maze validation|pathing/i.test(textOf(patTd)));
+
   // 11) map tools — non-destructive checks (real map create/compile is covered by live tests)
   const mapCompileDry = await client.callTool({ name: "map_compile", arguments: { name: "somemap", dryRun: true } });
   check("map_compile dryRun shows resourcecompiler + game/dota", /resourcecompiler/i.test(textOf(mapCompileDry)) && /game[\\/]dota/i.test(textOf(mapCompileDry)));
@@ -220,9 +226,17 @@ async function main() {
     check("kv3_read parses a real .vpcf", /CParticleSystemDefinition/.test(textOf(k3)));
   }
 
-  // 16) scaffold_td (temp addon)
+  // 16) scaffold_td (temp addon) — waypoint mode + maze mode
   const td = await client.callTool({ name: "scaffold_td", arguments: { waypoints: [[0, 0, 128], [1000, 0, 128], [1000, 1000, 128]] } });
   check("scaffold_td writes director", !td.isError && existsSync(join(tmp, "src", "vscripts", "td", "td_director.ts")));
+  const tdMaze = await client.callTool({ name: "scaffold_td", arguments: { maze: true, cell: 256 } });
+  check("scaffold_td maze writes pathfinder + maze director", !tdMaze.isError
+    && existsSync(join(tmp, "src", "vscripts", "td", "pathfinder.ts"))
+    && existsSync(join(tmp, "src", "vscripts", "td", "td_maze.ts")));
+  if (existsSync(join(tmp, "src", "vscripts", "td", "td_maze.ts"))) {
+    const mz = await readFile(join(tmp, "src", "vscripts", "td", "td_maze.ts"), "utf8");
+    check("maze director has canBuildAt + A* path follow", /canBuildAt/.test(mz) && /findPath/.test(mz) && /MoveToPosition/.test(mz));
+  }
 
   // 17) workshop tools — live against installed custom games (if any subscribed)
   const wl = await client.callTool({ name: "workshop_list", arguments: {} });

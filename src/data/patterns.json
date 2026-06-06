@@ -1,0 +1,74 @@
+{
+  "description": "Reusable Dota custom-game design/engineering patterns, learned from shipping games (Spin TD Reborn, GemTD).",
+  "patterns": [
+    {
+      "name": "Creep pathing via trigger waypoints",
+      "category": "tower-defense",
+      "summary": "Move creeps along a road using numbered map trigger volumes + a waypoint table (Spin TD Reborn).",
+      "technique": "Place named brush move-trigger volumes along the road; each OnStartTouch calls a map vscript that advances the unit to the next point in a global WAYPOINTS table via ExecuteOrderFromTable({UnitIndex, OrderType=DOTA_UNIT_ORDER_MOVE_TO_POSITION, Position=WAYPOINTS[next]}). An end trigger = leak.",
+      "api": "ExecuteOrderFromTable, DOTA_UNIT_ORDER_MOVE_TO_POSITION",
+      "source": "Spin TD Reborn (2860562213) map_script.lua"
+    },
+    {
+      "name": "Creep pathing via computed path + per-unit think",
+      "category": "tower-defense",
+      "summary": "Compute the route once, then each creep follows it with MoveToPosition and a think (GemTD).",
+      "technique": "Build a path table (e.g. from an A* solve) and store it; on each creep run a think that calls unit:MoveToPosition(path[target]) and increments target when within ~range. No brush triggers needed — fully programmatic (this is what scaffold_td emits).",
+      "api": "MoveToPosition, SetContextThink / Timers",
+      "source": "GemTD (474619917) addon_game_mode.lua"
+    },
+    {
+      "name": "Maze validation with grid A*",
+      "category": "tower-defense",
+      "summary": "Let players build a maze but never fully block the creep path (the core maze-TD rule).",
+      "technique": "Keep a boolean walkable grid. To validate a build, temporarily mark the target cell(s) blocked and run A* from the spawn cell to the finish cell; allow the build only if a path still exists, otherwise refuse. Recompute the creep path from the same grid after each successful build. scaffold_td --maze emits this.",
+      "api": "custom A* grid (Jumper-style: heuristics/node/path/bheap/astar)",
+      "source": "GemTD (474619917) pathfinder/*"
+    },
+    {
+      "name": "Declarative wave table",
+      "category": "tower-defense",
+      "summary": "Define waves as data, not code.",
+      "technique": "A table of Wave(creep, total, perSpawn, gold, ...) / Boss(...) entries (boss every ~5). A single spawner loop iterates it: spawn perSpawn each interval until total, then schedule the next wave.",
+      "source": "Spin TD Reborn waves.lua"
+    },
+    {
+      "name": "vscript HTTP backend",
+      "category": "backend",
+      "summary": "Custom games can call an external HTTP server from server-side vscript (leaderboards, save validation, anti-cheat).",
+      "technique": "const req = CreateHTTPRequestScriptVM(\"GET\"|\"POST\", url); req:SetHTTPRequestAbsoluteTimeoutMS(20000); req:Send(result => { local body = result[\"Body\"]; ... }). Push results to the client via CustomNetTables:SetTableValue. GemTD uses it for save codes + an anti-cheat verdict (server returns 'blocked' -> SetGameWinner).",
+      "api": "CreateHTTPRequestScriptVM, CScriptHTTPRequest:Send, CustomNetTables",
+      "source": "GemTD addon_game_mode.lua"
+    },
+    {
+      "name": "Save / load codes",
+      "category": "backend",
+      "summary": "Persist player progress as an encoded string (or via the HTTP backend).",
+      "technique": "Serialize state to JSON (dkjson), compress (libdeflate), sign/encode (sha2 / aes / base64) into a shareable code; reverse to restore. GemTD pairs this with the HTTP backend.",
+      "source": "GemTD libs (libdeflate, sha2, aeslua, base64, dkjson)"
+    },
+    {
+      "name": "Map anchors by name",
+      "category": "mapping",
+      "summary": "Bind vscript logic to specific map positions by naming point entities.",
+      "technique": "Name point entities (info_target / path_track) in the map (e.g. path0..pathN, spawn, finish); read them from vscript with Entities:FindByName(nil, \"path7\"):GetAbsOrigin(). map_build's `paths` names nodes name_0.. which you can resolve this way.",
+      "api": "Entities.FindByName, Entities.FindAllByName",
+      "source": "GemTD (spawns at Entities:FindByName(nil,'path7'))"
+    },
+    {
+      "name": "Per-unit AI scripts",
+      "category": "architecture",
+      "summary": "One AI script file per tower/boss keeps complex behaviour modular.",
+      "technique": "Give a unit a vscript (KV 'vscripts' / AddNewModifier think) per archetype: scripts/vscripts/unit_scripts/ai_tower_X.lua, ai_boss_Y.lua. Each owns that unit's targeting/abilities.",
+      "source": "Spin TD Reborn unit_scripts/ai_tower_*, ai_boss_*"
+    },
+    {
+      "name": "Custom projectiles",
+      "category": "architecture",
+      "summary": "A projectile/physics library for tower shots beyond ProjectileManager.",
+      "technique": "Both games ship a projectiles/physics lib (homing, AoE, custom motion) layered over the engine. For simple cases prefer the built-in ProjectileManager.CreateLinearProjectile / CreateTrackingProjectile.",
+      "api": "ProjectileManager (built-in) or a custom physics lib",
+      "source": "Spin TD + GemTD libs/projectiles.lua"
+    }
+  ]
+}

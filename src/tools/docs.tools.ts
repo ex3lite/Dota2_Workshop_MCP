@@ -2,9 +2,37 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchDocs, getDoc, listDocs, docCategories, searchTools, loadTools } from "../docs/docs.js";
 import { searchPanorama, getPanorama, panoramaStats } from "../api/panorama.js";
+import { resolveDataPath } from "../util/datapath.js";
+import { readFile } from "node:fs/promises";
 import { json, text, error, guard, ToolResult } from "../util/result.js";
 
 export function registerDocsTools(server: McpServer) {
+  server.registerTool(
+    "dota_patterns",
+    {
+      title: "Custom-game design patterns",
+      description:
+        "Reusable Dota custom-game engineering patterns distilled from shipping games (tower-defense pathing & maze " +
+        "validation, declarative waves, vscript HTTP backends, save codes, map anchors, per-unit AI, projectiles). " +
+        "Filter by query or category (tower-defense, backend, mapping, architecture).",
+      inputSchema: { query: z.string().optional(), category: z.string().optional() },
+    },
+    guard(async ({ query, category }): Promise<ToolResult> => {
+      const data = JSON.parse(await readFile(await resolveDataPath("patterns.json"), "utf8"));
+      let list = data.patterns as { name: string; category: string; summary: string; technique?: string; api?: string; source?: string }[];
+      if (category) list = list.filter((p) => p.category.toLowerCase() === category.toLowerCase());
+      if (query) {
+        const q = query.toLowerCase();
+        list = list.filter((p) => JSON.stringify(p).toLowerCase().includes(q));
+      }
+      if (!list.length) return error("No patterns match that filter.");
+      const body = list
+        .map((p) => `[${p.category}] ${p.name}\n  ${p.summary}\n  how: ${p.technique ?? "-"}${p.api ? `\n  api: ${p.api}` : ""}${p.source ? `\n  seen in: ${p.source}` : ""}`)
+        .join("\n\n");
+      return json({ count: list.length, patterns: list }, body);
+    }),
+  );
+
   // ---- ModDota guides -----------------------------------------------------
   server.registerTool(
     "docs_search",
