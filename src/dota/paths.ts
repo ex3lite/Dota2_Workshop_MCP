@@ -27,6 +27,7 @@ export interface DotaPaths {
   gameInfo: string;
   dmxconvertExe: string;
   pak01DirVpk: string;
+  workshopContentDir: string; // steamapps/workshop/content/570 (subscribed custom games)
   screenshotsDir: string;
   source: string; // how the root was found
 }
@@ -47,6 +48,7 @@ function derive(root: string, source: string): DotaPaths {
     gameInfo: join(root, "game", "dota", "gameinfo.gi"),
     dmxconvertExe: join(binWin64, "dmxconvert.exe"),
     pak01DirVpk: join(root, "game", "dota", "pak01_dir.vpk"),
+    workshopContentDir: join(root, "..", "..", "workshop", "content", "570"),
     screenshotsDir: join(root, "game", "dota", "screenshots"),
     source,
   };

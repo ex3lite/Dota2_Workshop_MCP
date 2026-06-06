@@ -11,11 +11,11 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: working — **58 tools**, end-to-end tested. It generates whole playable maps from a spec
+> Status: working — **62 tools**, end-to-end tested. It generates whole playable maps from a spec
 > (terrain shaping via the Dota tile grid + entities + waypoint paths → compile → .vpk), previews them
 > top-down as an image without launching the game, edits KV1 + KV3 (soundevents/particles) data, reads
 > base-game files straight out of the VPKs, and scaffolds TS/Lua content, Panorama, custom events & net
-> tables. The live debug loop runs
+> tables, and can read/learn from any subscribed custom game's files. The live debug loop runs
 > over the **VConsole2** protocol (verified against a running client: connect, send commands, read live
 > output, hot-reload, restart, screenshot, error-watch) and a bundled, searchable copy of the VScript
 > API, the Panorama JS API, and the ModDota guides ships for offline use.
@@ -32,7 +32,8 @@ fallback for non-tstl addons.
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors` |
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
-| **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog` |
+| **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog`, `scaffold_td` |
+| **Study reference games** | `workshop_list`, `workshop_inspect`, `workshop_read` |
 | **Sounds & KV3** | `soundevents_list`, `soundevents_get`, `soundevents_upsert`, `kv3_read` |
 | **Assets & base game** | `assets_list`, `assets_search`, `vpk_find`, `vpk_read`, `base_kv_entry` |
 | **Events & net tables** | `scaffold_custom_event`, `scaffold_net_table` |

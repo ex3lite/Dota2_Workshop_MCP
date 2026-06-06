@@ -11,6 +11,7 @@ import { registerSoundeventsTools } from "./tools/soundevents.tools.js";
 import { registerAssetTools } from "./tools/assets.tools.js";
 import { registerEventTools } from "./tools/events.tools.js";
 import { registerMapGenTools } from "./tools/mapgen.tools.js";
+import { registerWorkshopTools } from "./tools/workshop.tools.js";
 import { apiStats } from "./api/search.js";
 import { panoramaStats } from "./api/panorama.js";
 
@@ -31,6 +32,7 @@ export function createServer(): McpServer {
   registerAssetTools(server);
   registerEventTools(server);
   registerMapGenTools(server);
+  registerWorkshopTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(

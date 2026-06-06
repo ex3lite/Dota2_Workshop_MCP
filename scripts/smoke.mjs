@@ -66,7 +66,8 @@ async function main() {
     "kv3_read", "soundevents_list", "soundevents_get", "soundevents_upsert",
     "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
     "scaffold_custom_event", "scaffold_net_table",
-    "entity_catalog", "map_terrain", "map_build", "map_preview", "map_tile_to_world",
+    "entity_catalog", "map_terrain", "map_build", "map_preview", "map_tile_to_world", "scaffold_td",
+    "workshop_list", "workshop_inspect", "workshop_read",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -217,6 +218,19 @@ async function main() {
   if (existsSync(realVpcf)) {
     const k3 = await client.callTool({ name: "kv3_read", arguments: { path: realVpcf } });
     check("kv3_read parses a real .vpcf", /CParticleSystemDefinition/.test(textOf(k3)));
+  }
+
+  // 16) scaffold_td (temp addon)
+  const td = await client.callTool({ name: "scaffold_td", arguments: { waypoints: [[0, 0, 128], [1000, 0, 128], [1000, 1000, 128]] } });
+  check("scaffold_td writes director", !td.isError && existsSync(join(tmp, "src", "vscripts", "td", "td_director.ts")));
+
+  // 17) workshop tools — live against installed custom games (if any subscribed)
+  const wl = await client.callTool({ name: "workshop_list", arguments: {} });
+  const hasItems = !wl.isError && /\d{6,}/.test(textOf(wl));
+  check("workshop_list runs", !wl.isError);
+  if (hasItems && /2860562213|Spin TD/i.test(textOf(wl))) {
+    const wr = await client.callTool({ name: "workshop_read", arguments: { id: "2860562213", path: "scripts/vscripts/game/waves.lua", maxChars: 3000 } });
+    check("workshop_read reads Spin TD waves.lua", /waveTable/.test(textOf(wr)));
   }
 
   await client.close();
