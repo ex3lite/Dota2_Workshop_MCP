@@ -1,0 +1,12 @@
+{
+  "//": "Cursor: project .cursor/mcp.json or global ~/.cursor/mcp.json. Use ABSOLUTE paths.",
+  "mcpServers": {
+    "dota2-workshop": {
+      "command": "node",
+      "args": ["C:\\Users\\work\\dota2-workshop-mcp\\dist\\index.js"],
+      "env": {
+        "DOTA2_ADDON_DIR": "C:\\Users\\work\\Dota2CustomGame"
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "name": "dota2-workshop-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Dota 2 Workshop Tools — KeyValues tooling, TypeScript/Lua scaffolding, VScript API search, and addon build/launch.",
+  "type": "module",
+  "bin": {
+    "dota2-workshop-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src/data"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:api": "node scripts/build-api.mjs",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "smoke": "node scripts/smoke.mjs",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "dota2",
+    "dota-2-workshop-tools",
+    "source2",
+    "custom-game",
+    "keyvalues",
+    "vscript",
+    "typescript-to-lua"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,32 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerDiagnosticsTools } from "./tools/diagnostics.tools.js";
+import { registerKvTools } from "./tools/kv.tools.js";
+import { registerApiTools } from "./tools/api.tools.js";
+import { registerScaffoldTools } from "./tools/scaffold.tools.js";
+import { registerBuildTools } from "./tools/build.tools.js";
+import { apiStats } from "./api/search.js";
+
+export const SERVER_INFO = { name: "dota2-workshop-mcp", version: "0.1.0" } as const;
+
+export function createServer(): McpServer {
+  const server = new McpServer(SERVER_INFO);
+
+  registerDiagnosticsTools(server);
+  registerKvTools(server);
+  registerApiTools(server);
+  registerScaffoldTools(server);
+  registerBuildTools(server);
+
+  // A small read-only resource describing the bundled VScript API.
+  server.registerResource(
+    "vscript-api-info",
+    "dota://api/info",
+    { title: "Dota VScript API (bundled)", description: "Counts + generation time of the bundled VScript API data.", mimeType: "application/json" },
+    async (uri) => {
+      const stats = await apiStats();
+      return { contents: [{ uri: uri.href, text: JSON.stringify(stats, null, 2) }] };
+    },
+  );
+
+  return server;
+}
