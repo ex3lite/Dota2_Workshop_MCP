@@ -89,8 +89,9 @@ export function registerBuildTools(server: McpServer) {
     {
       title: "Launch Workshop Tools",
       description:
-        "Launch Dota 2 in Workshop Tools mode for the addon (dota2.exe -tools -addon <name>). Optionally start a map " +
-        "directly. The game runs detached.",
+        "Launch Dota 2 in Workshop Tools mode for the addon (dota2.exe -tools -addon <name>). This opens the Workshop " +
+        "Tools hub from which Hammer (maps), the Particle/Model/Material editors and the Asset Browser are launched. " +
+        "Optionally start a map directly. Runs detached.",
       inputSchema: {
         projectRoot: z.string().optional(),
         addon: z.string().optional(),

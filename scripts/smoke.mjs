@@ -63,6 +63,9 @@ async function main() {
     "dota_restart_game", "dota_dev_cycle", "dota_screenshot", "dota_watch_errors",
     "docs_search", "docs_get", "docs_list", "panorama_api_search", "panorama_api_get", "tools_catalog",
     "map_create", "map_add_entity", "map_to_text", "map_from_text", "map_compile", "map_list",
+    "kv3_read", "soundevents_list", "soundevents_get", "soundevents_upsert",
+    "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
+    "scaffold_custom_event", "scaffold_net_table",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -184,6 +187,32 @@ async function main() {
   check("map_compile dryRun shows resourcecompiler + game/dota", /resourcecompiler/i.test(textOf(mapCompileDry)) && /game[\\/]dota/i.test(textOf(mapCompileDry)));
   const mapList = await client.callTool({ name: "map_list", arguments: {} });
   check("map_list runs", !mapList.isError);
+
+  // 12) soundevents (KV3) on the temp addon
+  const seUp = await client.callTool({ name: "soundevents_upsert", arguments: { name: "MCP.Test", vsnd_files: ["sounds/ui/x.vsnd"], volume: 0.6 } });
+  check("soundevents_upsert creates an event", !seUp.isError && /MCP\.Test/.test(textOf(seUp)));
+  const seGet = await client.callTool({ name: "soundevents_get", arguments: { file: "game_sounds_custom.vsndevts", event: "MCP.Test" } });
+  check("soundevents_get returns it (KV3 round-trip)", /dota_src1_2d/.test(textOf(seGet)) && /0\.6/.test(textOf(seGet)));
+
+  // 13) events + net tables scaffolding
+  const ev = await client.callTool({ name: "scaffold_custom_event", arguments: { name: "mcp_demo_event", fields: { PlayerID: "PlayerID", amount: "number" } } });
+  check("scaffold_custom_event writes decl + snippets", !ev.isError && /CustomGameEventManager|GameEvents/.test(textOf(ev)));
+  check("custom event d.ts created", existsSync(join(tmp, "src", "common", "mcp_custom_events.d.ts")));
+  const nt = await client.callTool({ name: "scaffold_net_table", arguments: { name: "scoreboard" } });
+  check("scaffold_net_table writes decl + snippets", !nt.isError && /CustomNetTables/.test(textOf(nt)));
+
+  // 14) VPK reader against the REAL Dota install (proves base-game access)
+  const vf = await client.callTool({ name: "vpk_find", arguments: { query: "scripts/npc/npc_heroes", limit: 5 } });
+  check("vpk_find locates base npc_heroes", /npc_heroes\.txt/i.test(textOf(vf)));
+  const vr = await client.callTool({ name: "vpk_read", arguments: { path: "scripts/npc/npc_heroes.txt", maxChars: 2000 } });
+  check("vpk_read returns base file content", !vr.isError && /DOTAHeroes|#base|npc_dota_hero/i.test(textOf(vr)));
+
+  // 15) kv3_read on a real base soundevents-style KV3 file (absolute path)
+  const realVpcf = "C:/Program Files (x86)/Steam/steamapps/common/dota 2 beta/content/dota_addons/addon_template/particles/basic_ambient/basic_ambient.vpcf";
+  if (existsSync(realVpcf)) {
+    const k3 = await client.callTool({ name: "kv3_read", arguments: { path: realVpcf } });
+    check("kv3_read parses a real .vpcf", /CParticleSystemDefinition/.test(textOf(k3)));
+  }
 
   await client.close();
   await rm(tmp, { recursive: true, force: true });

@@ -26,6 +26,7 @@ export interface DotaPaths {
   dotaGameDir: string;
   gameInfo: string;
   dmxconvertExe: string;
+  pak01DirVpk: string;
   screenshotsDir: string;
   source: string; // how the root was found
 }
@@ -45,6 +46,7 @@ function derive(root: string, source: string): DotaPaths {
     dotaGameDir: join(root, "game", "dota"),
     gameInfo: join(root, "game", "dota", "gameinfo.gi"),
     dmxconvertExe: join(binWin64, "dmxconvert.exe"),
+    pak01DirVpk: join(root, "game", "dota", "pak01_dir.vpk"),
     screenshotsDir: join(root, "game", "dota", "screenshots"),
     source,
   };

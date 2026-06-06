@@ -11,8 +11,9 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: early but working — **42 tools** across 8 areas, end-to-end tested. It can even build & compile
-> playable maps programmatically (verified: generate vmap → compile → .vpk). The live debug loop runs
+> Status: working — **53 tools**, end-to-end tested. It builds & compiles playable maps programmatically
+> (vmap → compile → .vpk), edits KV1 + KV3 (soundevents/particles) data, reads base-game files straight
+> out of the VPKs, and scaffolds TS/Lua content, Panorama, custom events & net tables. The live debug loop runs
 > over the **VConsole2** protocol (verified against a running client: connect, send commands, read live
 > output, hot-reload, restart, screenshot, error-watch) and a bundled, searchable copy of the VScript
 > API, the Panorama JS API, and the ModDota guides ships for offline use.
@@ -29,6 +30,9 @@ fallback for non-tstl addons.
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors` |
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
+| **Sounds & KV3** | `soundevents_list`, `soundevents_get`, `soundevents_upsert`, `kv3_read` |
+| **Assets & base game** | `assets_list`, `assets_search`, `vpk_find`, `vpk_read`, `base_kv_entry` |
+| **Events & net tables** | `scaffold_custom_event`, `scaffold_net_table` |
 
 Everything is bundled so search works **offline**:
 - VScript (Lua) API — 97 classes / 242 globals / 72 enums, from [@moddota/dota-data](https://github.com/ModDota/dota-data).
