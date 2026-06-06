@@ -83,7 +83,7 @@ function defaultValuesFor(behavior: AbilityBehavior): Record<string, string | nu
     case "passive":
       return { movespeed_pct: 10 };
     case "channeled":
-      return { channel_damage: 100 };
+      return { channel_damage: 100, radius: 400 };
   }
 }
 
@@ -127,15 +127,20 @@ export async function scaffoldAbility(project: AddonProject, opts: ScaffoldAbili
   if (opts.manaCost !== undefined) kv.AbilityManaCost = String(opts.manaCost);
   if (Object.keys(values).length) kv.AbilityValues = values;
 
-  const { path: kvPath, action } = await writeNpcEntry(project, "abilities", name, objectToBlock(kv));
+  const { path: kvPath, action } = await writeNpcEntry(project, "abilities", name, objectToBlock(kv), { overwrite: !!opts.overwrite });
   result.modified.push(`${kvPath} (${action} "${name}")`);
+  if (action === "skipped") result.notes.push(`KV entry "${name}" already existed — kept it (pass overwrite=true to replace).`);
 
   // 3) Localization
-  const loc = await addLocalizationTokens(project, {
-    [`DOTA_Tooltip_ability_${name}`]: opts.displayName ?? prettyName(name),
-    [`DOTA_Tooltip_ability_${name}_Description`]: opts.description ?? "",
-  });
-  result.modified.push(`${loc.path} (+${loc.added.length} tokens)`);
+  const loc = await addLocalizationTokens(
+    project,
+    {
+      [`DOTA_Tooltip_ability_${name}`]: opts.displayName ?? prettyName(name),
+      [`DOTA_Tooltip_ability_${name}_Description`]: opts.description ?? "",
+    },
+    { overwrite: !!opts.overwrite },
+  );
+  result.modified.push(`${loc.path} (+${loc.added.length} tokens, ${loc.skipped.length} kept)`);
 
   if (behavior === "passive") {
     result.notes.push(`This passive references "modifier_${name}". Scaffold it with scaffold_modifier.`);
@@ -180,11 +185,15 @@ export async function scaffoldModifier(project: AddonProject, opts: ScaffoldModi
   }
 
   if (opts.displayName || opts.description) {
-    const loc = await addLocalizationTokens(project, {
-      [`DOTA_Tooltip_modifier_${name}`]: opts.displayName ?? prettyName(name),
-      [`DOTA_Tooltip_modifier_${name}_Description`]: opts.description ?? "",
-    });
-    result.modified.push(`${loc.path} (+${loc.added.length} tokens)`);
+    const loc = await addLocalizationTokens(
+      project,
+      {
+        [`DOTA_Tooltip_modifier_${name}`]: opts.displayName ?? prettyName(name),
+        [`DOTA_Tooltip_modifier_${name}_Description`]: opts.description ?? "",
+      },
+      { overwrite: !!opts.overwrite },
+    );
+    result.modified.push(`${loc.path} (+${loc.added.length} tokens, ${loc.skipped.length} kept)`);
   }
   return result;
 }
@@ -241,14 +250,19 @@ export async function scaffoldItem(project: AddonProject, opts: ScaffoldItemOpti
   if (opts.texture) kv.AbilityTextureName = opts.texture;
   if (opts.values && Object.keys(opts.values).length) kv.AbilityValues = opts.values;
 
-  const { path: kvPath, action } = await writeNpcEntry(project, "items", name, objectToBlock(kv));
+  const { path: kvPath, action } = await writeNpcEntry(project, "items", name, objectToBlock(kv), { overwrite: !!opts.overwrite });
   result.modified.push(`${kvPath} (${action} "${name}")`);
+  if (action === "skipped") result.notes.push(`KV entry "${name}" already existed — kept it (pass overwrite=true to replace).`);
 
-  const loc = await addLocalizationTokens(project, {
-    [`DOTA_Tooltip_ability_${name}`]: opts.displayName ?? prettyName(name),
-    [`DOTA_Tooltip_ability_${name}_Description`]: opts.description ?? "",
-  });
-  result.modified.push(`${loc.path} (+${loc.added.length} tokens)`);
+  const loc = await addLocalizationTokens(
+    project,
+    {
+      [`DOTA_Tooltip_ability_${name}`]: opts.displayName ?? prettyName(name),
+      [`DOTA_Tooltip_ability_${name}_Description`]: opts.description ?? "",
+    },
+    { overwrite: !!opts.overwrite },
+  );
+  result.modified.push(`${loc.path} (+${loc.added.length} tokens, ${loc.skipped.length} kept)`);
   return result;
 }
 
@@ -291,11 +305,12 @@ export async function scaffoldUnit(project: AddonProject, opts: ScaffoldUnitOpti
     ...(opts.fields ?? {}),
   };
 
-  const { path: kvPath, action } = await writeNpcEntry(project, "units", name, objectToBlock(kv));
+  const { path: kvPath, action } = await writeNpcEntry(project, "units", name, objectToBlock(kv), { overwrite: !!opts.overwrite });
   result.modified.push(`${kvPath} (${action} "${name}")`);
+  if (action === "skipped") result.notes.push(`KV entry "${name}" already existed — kept it (pass overwrite=true to replace).`);
 
-  const loc = await addLocalizationTokens(project, { [name]: opts.displayName ?? prettyName(name) });
-  result.modified.push(`${loc.path} (+${loc.added.length} tokens)`);
+  const loc = await addLocalizationTokens(project, { [name]: opts.displayName ?? prettyName(name) }, { overwrite: !!opts.overwrite });
+  result.modified.push(`${loc.path} (+${loc.added.length} tokens, ${loc.skipped.length} kept)`);
   result.notes.push("Spawn with CreateUnitByName(\"" + name + "\", ...) from vscripts.");
   return result;
 }
@@ -324,12 +339,13 @@ export async function scaffoldHero(project: AddonProject, opts: ScaffoldHeroOpti
   });
   Object.assign(kv, opts.fields ?? {});
 
-  const { path: kvPath, action } = await writeNpcEntry(project, "heroes", name, objectToBlock(kv));
+  const { path: kvPath, action } = await writeNpcEntry(project, "heroes", name, objectToBlock(kv), { overwrite: !!opts.overwrite });
   result.modified.push(`${kvPath} (${action} "${name}")`);
+  if (action === "skipped") result.notes.push(`KV entry "${name}" already existed — kept it (pass overwrite=true to replace).`);
 
   if (opts.displayName) {
-    const loc = await addLocalizationTokens(project, { [name]: opts.displayName });
-    result.modified.push(`${loc.path} (+${loc.added.length} tokens)`);
+    const loc = await addLocalizationTokens(project, { [name]: opts.displayName }, { overwrite: !!opts.overwrite });
+    result.modified.push(`${loc.path} (+${loc.added.length} tokens, ${loc.skipped.length} kept)`);
   }
   result.notes.push("Heroes are overrides: only the fields you set replace the base hero's values.");
   return result;

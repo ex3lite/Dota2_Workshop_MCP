@@ -58,9 +58,14 @@ export async function writeNpcEntry(
   key: NpcFileKey,
   entityKey: string,
   block: KVBlock,
-): Promise<{ path: string; action: "inserted" | "updated" }> {
+  options: { overwrite?: boolean } = {},
+): Promise<{ path: string; action: "inserted" | "updated" | "skipped" }> {
   const { path, doc } = await loadNpcFile(project, key);
   const wrapper = ensureWrapper(doc, key);
+  // Don't clobber a hand-authored entry unless overwrite is explicitly allowed.
+  if (options.overwrite === false && findPair(wrapper, entityKey)) {
+    return { path, action: "skipped" };
+  }
   const action = upsertPair(wrapper, entityKey, block);
   await writeTextFile(path, serializeKV(doc), { encoding: "utf8" });
   return { path, action };
@@ -84,7 +89,8 @@ export async function removeNpcEntry(
 export async function addLocalizationTokens(
   project: AddonProject,
   tokens: Record<string, string>,
-): Promise<{ path: string; added: string[]; updated: string[] }> {
+  options: { overwrite?: boolean } = {},
+): Promise<{ path: string; added: string[]; updated: string[]; skipped: string[] }> {
   const path = project.localizationFile;
   let doc: KVDocument;
   let encoding: "utf8" | "utf16le" = "utf16le";
@@ -131,11 +137,19 @@ export async function addLocalizationTokens(
 
   const added: string[] = [];
   const updated: string[] = [];
+  const skipped: string[] = [];
   for (const [k, v] of Object.entries(tokens)) {
+    // Preserve a user's edited token unless overwrite is explicitly allowed.
+    if (options.overwrite === false && findPair(tokensBlock, k)) {
+      skipped.push(k);
+      continue;
+    }
     const action = upsertPair(tokensBlock, k, v);
     (action === "inserted" ? added : updated).push(k);
   }
 
-  await writeTextFile(path, serializeKV(doc), { encoding, bom: hadBom || encoding === "utf16le" });
-  return { path, added, updated };
+  if (added.length || updated.length) {
+    await writeTextFile(path, serializeKV(doc), { encoding, bom: hadBom || encoding === "utf16le" });
+  }
+  return { path, added, updated, skipped };
 }

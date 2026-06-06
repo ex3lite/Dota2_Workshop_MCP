@@ -16,7 +16,11 @@ export const BEHAVIOR_PRESETS: Record<AbilityBehavior, BehaviorPreset> = {
     extraKv: { AbilityUnitTargetTeam: "DOTA_UNIT_TARGET_TEAM_ENEMY", AbilityUnitTargetType: "DOTA_UNIT_TARGET_HERO | DOTA_UNIT_TARGET_BASIC" },
   },
   passive: { flags: "DOTA_ABILITY_BEHAVIOR_PASSIVE", extraKv: {} },
-  channeled: { flags: "DOTA_ABILITY_BEHAVIOR_CHANNELLED | DOTA_ABILITY_BEHAVIOR_POINT", extraKv: {} },
+  channeled: {
+    flags: "DOTA_ABILITY_BEHAVIOR_CHANNELLED | DOTA_ABILITY_BEHAVIOR_POINT",
+    // Without a non-zero channel time a CHANNELLED ability finishes instantly.
+    extraKv: { AbilityChannelTime: "3.0" },
+  },
 };
 
 /** Relative import path from a script at <scriptDir>/<name>.ts back to lib/dota_ts_adapter. */
@@ -91,8 +95,10 @@ export function tsAbility(name: string, behavior: AbilityBehavior, scriptDir: st
       break;
     case "channeled":
       body = `
+    point?: Vector;
+
     OnSpellStart(): void {
-        // Channel begins. Use OnChannelThink / OnChannelFinish for effects.
+        this.point = this.GetCursorPosition();
     }
 
     OnChannelThink(interval: number): void {
@@ -100,9 +106,26 @@ export function tsAbility(name: string, behavior: AbilityBehavior, scriptDir: st
     }
 
     OnChannelFinish(interrupted: boolean): void {
-        if (interrupted) return;
+        if (interrupted || !this.point) return;
         const caster = this.GetCaster();
-        // Apply the channeled effect here.
+        const radius = this.GetSpecialValueFor("radius");
+        const damage = this.GetSpecialValueFor("channel_damage");
+
+        const enemies = FindUnitsInRadius(
+            caster.GetTeamNumber(),
+            this.point,
+            undefined,
+            radius,
+            UnitTargetTeam.ENEMY,
+            UnitTargetType.HERO | UnitTargetType.BASIC,
+            UnitTargetFlags.NONE,
+            FindOrder.ANY,
+            false,
+        );
+
+        for (const enemy of enemies) {
+            ApplyDamage({ victim: enemy, attacker: caster, damage, damage_type: DamageTypes.MAGICAL, ability: this });
+        }
     }`;
       break;
     case "no_target":
@@ -149,7 +172,13 @@ end
         ? `    local caster = self:GetCaster()
     local point = self:GetCursorPosition()
     local radius = self:GetSpecialValueFor("radius")
-    -- TODO: find units in radius and apply effect`
+    local damage = self:GetSpecialValueFor("damage")
+    local enemies = FindUnitsInRadius(caster:GetTeamNumber(), point, nil, radius,
+        DOTA_UNIT_TARGET_TEAM_ENEMY, bit.bor(DOTA_UNIT_TARGET_HERO, DOTA_UNIT_TARGET_BASIC),
+        DOTA_UNIT_TARGET_FLAG_NONE, FIND_ANY_ORDER, false)
+    for _, enemy in ipairs(enemies) do
+        ApplyDamage({ victim = enemy, attacker = caster, damage = damage, damage_type = DAMAGE_TYPE_MAGICAL, ability = self })
+    end`
         : `    local caster = self:GetCaster()
     local duration = self:GetSpecialValueFor("duration")
     caster:AddNewModifier(caster, self, "modifier_${name}", { duration = duration })`;

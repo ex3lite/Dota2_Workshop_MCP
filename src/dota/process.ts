@@ -28,7 +28,10 @@ export function run(exe: string, args: string[], opts: RunOptions = {}): Promise
     let stderr = "";
     let timedOut = false;
 
-    const clip = (s: string, add: string) => (s.length > maxOutputChars ? s : (s + add).slice(-maxOutputChars * 2));
+    // Keep a rolling tail: always append, then bound to 2x the cap. The earlier guard
+    // (return s unchanged once over the cap) silently dropped ALL later output —
+    // including the trailing compiler errors that matter most.
+    const clip = (s: string, add: string) => (s + add).slice(-maxOutputChars * 2);
 
     child.stdout?.on("data", (d) => (stdout = clip(stdout, d.toString())));
     child.stderr?.on("data", (d) => (stderr = clip(stderr, d.toString())));
@@ -59,6 +62,12 @@ export function spawnDetached(exe: string, args: string[], cwd?: string): { comm
 /** The platform-appropriate npm executable. */
 export function npmCommand(): string {
   return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+/** Force-kill a process by image name (best effort; succeeds even if not running). */
+export async function killProcess(image: string): Promise<RunResult> {
+  if (process.platform === "win32") return run("taskkill", ["/F", "/IM", image], { timeoutMs: 15_000 });
+  return run("pkill", ["-f", image], { timeoutMs: 15_000 });
 }
 
 function quoteCommand(exe: string, args: string[]): string {

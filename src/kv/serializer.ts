@@ -19,8 +19,10 @@ const DEFAULTS: Required<SerializeOptions> = {
 };
 
 function escape(value: string): string {
-  // KV rarely needs escapes; only escape embedded quotes/backslashes to stay safe.
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  // The lenient parser treats a lone backslash literally (only \" and \\ are special),
+  // so for faithful round-trips we escape ONLY embedded quotes — doubling backslashes
+  // here would corrupt Windows/material paths like models\heroes\x.vmdl on save.
+  return value.replace(/"/g, '\\"');
 }
 
 export function serializeKV(doc: KVDocument | KVBlock, options: SerializeOptions = {}): string {
@@ -49,7 +51,9 @@ function writeNodes(nodes: KVNode[], depth: number, out: string[], opts: Require
     if (node.leadingComments) for (const c of node.leadingComments) out.push(`${pad}//${c ? " " + c : ""}`);
 
     if (isBlock(node.value)) {
-      out.push(`${pad}"${escape(node.key)}"`);
+      const cond = node.condition ? ` [${node.condition}]` : "";
+      const inline = node.inlineComment ? `\t// ${node.inlineComment}` : "";
+      out.push(`${pad}"${escape(node.key)}"${cond}${inline}`);
       out.push(`${pad}{`);
       writeNodes(node.value.nodes, depth + 1, out, opts);
       out.push(`${pad}}`);
@@ -70,6 +74,6 @@ function computeGap(keyLen: number, valueColumn: number): string {
 
 /** Convenience: serialize just the value tree (no document wrapper). */
 export function serializeValue(value: KVValue, options?: SerializeOptions): string {
-  if (!isBlock(value)) return `"${value}"`;
+  if (!isBlock(value)) return `"${escape(value)}"`;
   return serializeKV(value, options);
 }

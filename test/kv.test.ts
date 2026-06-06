@@ -71,6 +71,46 @@ test("objectToBlock coerces numbers and booleans", () => {
   assert.equal(obj.d, "x");
 });
 
+test("comment or [$cond] between a key and its block does not throw", () => {
+  const src = `"DOTAAbilities"
+{
+    "a" // base ability
+    {
+        "x" "1"
+    }
+    "b" [$WIN32]
+    {
+        "y" "2"
+    }
+}`;
+  const doc = parseKV(src);
+  const w = getWrapperBlock(doc)!;
+  assert.ok(isBlock(findPair(w, "a")!.value), "a is a block");
+  assert.ok(isBlock(findPair(w, "b")!.value), "b is a block");
+  const out = serializeKV(doc);
+  assert.ok(out.includes("[$WIN32]"), "block condition round-trips");
+});
+
+test("backslash paths are not doubled (idempotent round-trip)", () => {
+  const src = `"DOTAUnits"
+{
+    "npc_x"
+    {
+        "Model" "models\\heroes\\x.vmdl"
+    }
+}`;
+  const out = serializeKV(parseKV(src));
+  assert.ok(out.includes("models\\heroes\\x.vmdl"), "single backslashes preserved");
+  assert.ok(!out.includes("models\\\\heroes"), "backslashes not doubled");
+  assert.equal(serializeKV(parseKV(out)), out, "serialize is idempotent");
+});
+
+test("leading-slash value is not swallowed as a comment", () => {
+  const doc = parseKV(`"D"\n{\n"k" "/relative/path"\n}`);
+  const obj = blockToObject(getWrapperBlock(doc)!) as any;
+  assert.equal(obj.k, "/relative/path");
+});
+
 test("nested AbilityValues blocks round-trip", () => {
   const src = `"DOTAAbilities"
 {

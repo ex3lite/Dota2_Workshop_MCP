@@ -13,6 +13,8 @@ interface Token {
   kind: TokKind;
   value: string;
   line: number;
+  /** Line of the token's last character (differs from `line` for multi-line quoted strings). */
+  endLine?: number;
 }
 
 export class KVParseError extends Error {
@@ -46,18 +48,25 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Comment: `//` ... EOL, or a lenient single `/` starting a token (malformed
-    // banner comments like `/====` appear in real files).
+    // Comment: `//` ... EOL. We also leniently treat a single `/` as a comment when
+    // it begins a malformed banner line (e.g. `/====`), but NOT when it starts a real
+    // bareword like a leading-slash value, so we don't swallow legitimate content.
     if (c === "/") {
-      let j = i + (input[i + 1] === "/" ? 2 : 1);
-      let text = "";
-      while (j < n && input[j] !== "\n") {
-        text += input[j];
-        j++;
+      const n2 = input[i + 1];
+      const bannerChar = n2 === "=" || n2 === "*" || n2 === "-" || n2 === "#" || n2 === "~";
+      const eolOrWs = n2 === undefined || n2 === "\n" || n2 === "\r" || n2 === " " || n2 === "\t";
+      if (n2 === "/" || bannerChar || eolOrWs) {
+        let j = i + (n2 === "/" ? 2 : 1);
+        let text = "";
+        while (j < n && input[j] !== "\n") {
+          text += input[j];
+          j++;
+        }
+        tokens.push({ kind: "comment", value: text.trim(), line });
+        i = j;
+        continue;
       }
-      tokens.push({ kind: "comment", value: text.trim(), line });
-      i = j;
-      continue;
+      // Otherwise fall through to the bareword branch (a value like "/path").
     }
 
     if (c === "{") {
@@ -110,7 +119,7 @@ function tokenize(input: string): Token[] {
       }
       if (j >= n) throw new KVParseError("unterminated quoted string", startLine);
       j++; // consume closing quote
-      tokens.push({ kind: "string", value: text, line: startLine });
+      tokens.push({ kind: "string", value: text, line: startLine, endLine: line });
       i = j;
       continue;
     }
@@ -127,7 +136,7 @@ function tokenize(input: string): Token[] {
         j++;
       }
       const kind: TokKind = text.toLowerCase() === "#base" ? "base" : "string";
-      tokens.push({ kind, value: text, line });
+      tokens.push({ kind, value: text, line, endLine: line });
       i = j;
       continue;
     }
@@ -184,7 +193,7 @@ export function parseKV(input: string): KVDocument {
           baseNode.leadingComments = pendingComments;
           pendingComments = [];
         }
-        attachInlineComment(baseNode, arg.line);
+        attachInlineComment(baseNode, arg);
         nodes.push(baseNode);
         continue;
       }
@@ -202,6 +211,17 @@ export function parseKV(input: string): KVDocument {
       // tok.kind === "string": this is a key.
       next();
       const key = tok.value;
+
+      // A comment and/or [$cond] may sit between the key and its value/'{' (a legal
+      // Valve pattern). Drain them so we don't reject valid files.
+      const betweenComments: string[] = [];
+      let betweenCond: string | undefined;
+      while (peek() && (peek().kind === "comment" || peek().kind === "cond")) {
+        const t = next();
+        if (t.kind === "comment") betweenComments.push(t.value);
+        else betweenCond = t.value;
+      }
+
       const afterKey = peek();
       if (!afterKey) {
         throw new KVParseError(`key "${key}" has no value`, tok.line);
@@ -212,6 +232,8 @@ export function parseKV(input: string): KVDocument {
         pair.leadingComments = pendingComments;
         pendingComments = [];
       }
+      if (betweenCond) pair.condition = betweenCond;
+      if (betweenComments.length) pair.inlineComment = betweenComments.join(" ");
 
       if (afterKey.kind === "lbrace") {
         next(); // consume {
@@ -220,11 +242,11 @@ export function parseKV(input: string): KVDocument {
       } else if (afterKey.kind === "string") {
         next();
         pair.value = afterKey.value;
-        // optional [$cond] suffix
+        // optional [$cond] suffix after the value
         if (peek() && peek().kind === "cond") {
           pair.condition = next().value;
         }
-        attachInlineComment(pair, afterKey.line);
+        attachInlineComment(pair, afterKey);
       } else {
         throw new KVParseError(`key "${key}" must be followed by a value or '{'`, tok.line);
       }
@@ -239,10 +261,11 @@ export function parseKV(input: string): KVDocument {
     return nodes;
   }
 
-  // If the next token after a value is a comment on the same line, attach it inline.
-  function attachInlineComment(node: KVPair | KVBase, valueLine: number) {
+  // If the next token after a value is a comment on the same line as the value's last
+  // line, attach it inline (multi-line quoted values end on a later line than they start).
+  function attachInlineComment(node: KVPair | KVBase, valueTok: Token) {
     const t = peek();
-    if (t && t.kind === "comment" && t.line === valueLine) {
+    if (t && t.kind === "comment" && t.line === (valueTok.endLine ?? valueTok.line)) {
       node.inlineComment = t.value;
       next();
     }

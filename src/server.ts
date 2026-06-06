@@ -4,6 +4,7 @@ import { registerKvTools } from "./tools/kv.tools.js";
 import { registerApiTools } from "./tools/api.tools.js";
 import { registerScaffoldTools } from "./tools/scaffold.tools.js";
 import { registerBuildTools } from "./tools/build.tools.js";
+import { registerDebugTools } from "./tools/debug.tools.js";
 import { apiStats } from "./api/search.js";
 
 export const SERVER_INFO = { name: "dota2-workshop-mcp", version: "0.1.0" } as const;
@@ -16,6 +17,7 @@ export function createServer(): McpServer {
   registerApiTools(server);
   registerScaffoldTools(server);
   registerBuildTools(server);
+  registerDebugTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(

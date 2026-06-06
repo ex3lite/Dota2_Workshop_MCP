@@ -11,8 +11,8 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: early but working — 23 tools, end-to-end tested. A live debug loop (hot-reload + console
-> commands + log tailing) is in progress.
+> Status: early but working — **28 tools** across 6 areas, end-to-end tested, including a live debug
+> loop driven over the **VConsole2** protocol (hot-reload, console commands, live output, restart).
 
 ## Features
 
@@ -23,6 +23,7 @@ fallback for non-tstl addons.
 | **Scaffolding** | `scaffold_ability`, `scaffold_modifier`, `scaffold_item`, `scaffold_unit`, `scaffold_hero`, `scaffold_panorama_panel` |
 | **VScript API** | `lua_api_search`, `lua_api_get`, `lua_api_class_methods` |
 | **Build & launch** | `addon_build`, `addon_compile_content`, `addon_launch_tools`, `addon_launch_custom_game`, `addon_link` |
+| **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle` |
 
 The VScript API (97 classes, 242 globals, 72 enums) is bundled from
 [@moddota/dota-data](https://github.com/ModDota/dota-data) so search works offline.
@@ -82,6 +83,35 @@ Use [`examples/cursor.mcp.json`](examples/cursor.mcp.json) at `.cursor/mcp.json`
 5. `addon_launch_custom_game` `{ map: "..." }` — boot tools mode and start the map.
 
 All build/launch tools accept `dryRun: true` to preview the exact command without running it.
+
+## Live debugging & iteration
+
+The debug tools drive a running game through the **VConsole2** protocol — the same channel
+`vconsole2.exe` uses. In `-tools` mode the game listens on `127.0.0.1:29000` (override with
+`-vconport`, or the `DOTA2_VCONPORT` env var on the MCP side). This is the reliable path on Windows:
+the classic `-netconport` telnet console has been broken on Windows since 2023, and `console.log` is
+buffered until the client exits — so live output is read from the VConsole `PRNT` stream instead.
+
+The launch tools already pass `-tools` (and `-vconport`), so the channel is available after
+`addon_launch_custom_game`. Then:
+
+- **`dota_send_console_command`** — run any console command and get back the output it printed.
+- **`dota_read_console_log`** — read recent live console output (with optional `grep`).
+- **`dota_reload_scripts`** — compile + `script_reload` (hot-reload Lua without relaunch).
+- **`dota_restart_game`** — `taskkill` + relaunch + reconnect (for changes that can't hot-reload).
+- **`dota_dev_cycle`** — one call: build, then pick the cheapest apply path.
+
+What hot-reloads vs needs a restart:
+
+| Change | Action |
+| --- | --- |
+| Lua function bodies | `dota_reload_scripts` (`script_reload`) |
+| Panorama (xml/css/js) | auto-reloads after compile — no relaunch |
+| KV files (`npc_*_custom.txt`) | `dota_restart_game` (full relaunch) |
+| New/removed scripts, changed class structure, registrations | `dota_restart_game` |
+
+> Tip: the ModDota template uses `Dynamic_Wrap`/`GameRules.Addon.Reload()` so reloaded code is
+> picked up — keep event listeners wrapped for `script_reload` to take effect.
 
 ## Notes & limitations
 

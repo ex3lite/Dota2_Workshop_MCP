@@ -5,6 +5,8 @@ import { resolveProject } from "../config.js";
 import { requireDotaPaths } from "../dota/paths.js";
 import { run, spawnDetached, npmCommand } from "../dota/process.js";
 import { AddonProject } from "../dota/project.js";
+import { buildLaunchArgs } from "../dota/launch.js";
+import { defaultVconPort } from "../dota/vconsole.js";
 import { pathExists } from "../util/fsx.js";
 import { json, text, error, guard, ToolResult } from "../util/result.js";
 
@@ -93,15 +95,20 @@ export function registerBuildTools(server: McpServer) {
         addon: z.string().optional(),
         map: z.string().optional().describe("If set, also runs +dota_launch_custom_game <addon> <map>."),
         console: z.boolean().optional().describe("Add -console (default true)."),
+        vconPort: z.number().int().min(1).max(65535).optional().describe("VConsole listener port (-vconport). Default 29000."),
         dryRun: z.boolean().optional(),
       },
     },
-    guard(async ({ projectRoot, addon, map, console: withConsole, dryRun }): Promise<ToolResult> => {
+    guard(async ({ projectRoot, addon, map, console: withConsole, vconPort, dryRun }): Promise<ToolResult> => {
       const dota = await requireDotaPaths();
       const { name } = await resolveAddonName(projectRoot, addon);
-      const args = ["-novid", "-tools", "-addon", name];
-      if (withConsole !== false) args.push("-console");
-      if (map) args.push("+dota_launch_custom_game", name, map);
+      const args = buildLaunchArgs({
+        addon: name,
+        map,
+        console: withConsole !== false,
+        dev: true,
+        vconPort: vconPort ?? defaultVconPort(),
+      });
       const cmd = `"${dota.dota2Exe}" ${args.join(" ")}`;
       if (dryRun) return text(`[dry run]\n${cmd}`);
       const { pid } = spawnDetached(dota.dota2Exe, args, dota.binWin64);
@@ -120,13 +127,22 @@ export function registerBuildTools(server: McpServer) {
         projectRoot: z.string().optional(),
         addon: z.string().optional(),
         map: z.string().describe("Map name from the addon's addoninfo.txt 'maps' list."),
+        vconPort: z.number().int().min(1).max(65535).optional().describe("VConsole listener port (-vconport). Default 29000."),
+        cheats: z.boolean().optional().describe("Enable sv_cheats + developer (default true)."),
         dryRun: z.boolean().optional(),
       },
     },
-    guard(async ({ projectRoot, addon, map, dryRun }): Promise<ToolResult> => {
+    guard(async ({ projectRoot, addon, map, vconPort, cheats, dryRun }): Promise<ToolResult> => {
       const dota = await requireDotaPaths();
       const { name } = await resolveAddonName(projectRoot, addon);
-      const args = ["-novid", "-addon", name, "-tools", "-console", "-insecure", "+dota_launch_custom_game", name, map];
+      const args = buildLaunchArgs({
+        addon: name,
+        map,
+        insecure: true,
+        dev: true,
+        cheats: cheats !== false,
+        vconPort: vconPort ?? defaultVconPort(),
+      });
       const cmd = `"${dota.dota2Exe}" ${args.join(" ")}`;
       if (dryRun) return text(`[dry run]\n${cmd}`);
       const { pid } = spawnDetached(dota.dota2Exe, args, dota.binWin64);

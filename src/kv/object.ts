@@ -102,10 +102,20 @@ export function removePair(block: KVBlock, key: string, caseInsensitive = true):
 export function ensureBase(doc: KVDocument, path: string): boolean {
   const has = doc.nodes.some((n) => n.kind === "base" && (n as { path: string }).path.toLowerCase() === path.toLowerCase());
   if (has) return false;
-  // Insert after any leading comments but before the wrapper pair.
+  // Insert after any leading comments but before the wrapper pair. The parser attaches
+  // a file-leading banner comment to the wrapper pair as leadingComments, so move those
+  // onto the #base node to keep the header on top.
   const wrapperIdx = doc.nodes.findIndex((n) => n.kind === "pair");
   const baseNode: KVNode = { kind: "base", path };
-  if (wrapperIdx >= 0) doc.nodes.splice(wrapperIdx, 0, baseNode);
-  else doc.nodes.push(baseNode);
+  if (wrapperIdx >= 0) {
+    const wrapper = doc.nodes[wrapperIdx] as KVPair;
+    if (wrapper.leadingComments?.length) {
+      baseNode.leadingComments = wrapper.leadingComments;
+      delete wrapper.leadingComments;
+    }
+    doc.nodes.splice(wrapperIdx, 0, baseNode);
+  } else {
+    doc.nodes.push(baseNode);
+  }
   return true;
 }

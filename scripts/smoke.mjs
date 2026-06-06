@@ -59,6 +59,8 @@ async function main() {
   for (const expected of [
     "dota_doctor", "addon_list", "kv_read", "kv_upsert_entry", "lua_api_search",
     "lua_api_get", "scaffold_ability", "scaffold_modifier", "addon_build", "addon_launch_tools",
+    "dota_send_console_command", "dota_read_console_log", "dota_reload_scripts",
+    "dota_restart_game", "dota_dev_cycle",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -101,6 +103,18 @@ async function main() {
     check("localization has the tooltip token", c.includes("DOTA_Tooltip_ability_verify_fireball"));
   }
 
+  // 3b) overwrite guard: re-scaffold same ability without overwrite must refuse (source guard);
+  //     with overwrite=true it updates the KV entry.
+  const abAgain = await client.callTool({ name: "scaffold_ability", arguments: { name: "verify_fireball", behavior: "point", lang: "ts" } });
+  check("re-scaffold without overwrite refuses", abAgain.isError === true && /overwrite=true/.test(textOf(abAgain)));
+  const abOver = await client.callTool({ name: "scaffold_ability", arguments: { name: "verify_fireball", behavior: "point", lang: "ts", overwrite: true } });
+  check("re-scaffold with overwrite=true updates KV", !abOver.isError && /updated "verify_fireball"/.test(textOf(abOver)));
+
+  // 3c) unit has no source file, so its KV overwrite guard is the reachable path
+  await client.callTool({ name: "scaffold_unit", arguments: { name: "npc_dota_verify2" } });
+  const unit2 = await client.callTool({ name: "scaffold_unit", arguments: { name: "npc_dota_verify2", model: "changed.vmdl" } });
+  check("re-scaffold unit keeps existing KV (no clobber)", /skipped "npc_dota_verify2"|already existed/.test(textOf(unit2)));
+
   // 4) scaffold_modifier
   const mod = await client.callTool({ name: "scaffold_modifier", arguments: { name: "modifier_verify", lang: "ts" } });
   check("scaffold_modifier succeeded", !mod.isError, textOf(mod));
@@ -128,6 +142,15 @@ async function main() {
   // 8) dota_doctor (read-only; will report whether the real install is found)
   const doctor = await client.callTool({ name: "dota_doctor", arguments: {} });
   check("dota_doctor runs", !doctor.isError, textOf(doctor).slice(0, 200));
+
+  // 9) debug tools — use port 29999 (no game listening) so VConsole refuses deterministically
+  const sendNoGame = await client.callTool({ name: "dota_send_console_command", arguments: { command: "echo hi", vconPort: 29999, waitMs: 500 } });
+  check("send_console_command errors gracefully when no game", sendNoGame.isError === true && /VConsole|tools mode/i.test(textOf(sendNoGame)));
+  const readNoGame = await client.callTool({ name: "dota_read_console_log", arguments: { vconPort: 29999 } });
+  check("read_console_log errors gracefully when no game", readNoGame.isError === true);
+  const restartDry = await client.callTool({ name: "dota_restart_game", arguments: { map: "dota", vconPort: 29999, dryRun: true } });
+  const rt = textOf(restartDry);
+  check("restart_game dryRun has taskkill + launch + vconport", /taskkill/i.test(rt) && rt.includes("dota2.exe") && rt.includes("-vconport"));
 
   await client.close();
   await rm(tmp, { recursive: true, force: true });

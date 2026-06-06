@@ -46,13 +46,13 @@ function typeStr(t) {
     case "literal":
       return JSON.stringify(t.value);
     case "table":
-      return "table";
+      return t.key ? `table<${typeList(t.key)}, ${typeList(t.value ?? [])}>` : "table";
     case "function": {
       const ps = (t.args ?? []).map((a) => typeList(a.types ?? [])).join(", ");
       return `func(${ps}) => ${typeList(t.returns ?? ["nil"])}`;
     }
     default:
-      return t.kind ?? "any";
+      return "any";
   }
 }
 
