@@ -8,7 +8,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { readFile, writeFile, mkdir, rm, copyFile } from "node:fs/promises";
 import { findFiles, resolveVpk } from "../dota/reflib.js";
 import { ensureVrf, vrfDecode, vrfDecompileText } from "../dota/vrf.js";
@@ -16,7 +16,10 @@ import { requireDotaPaths } from "../dota/paths.js";
 import { decodePng, montage, Rgba } from "../util/imgmontage.js";
 import { encodeRgbaPng } from "../util/png.js";
 import { parseWav, renderWaveform, fmtDuration, detectAudio, mp3DurationSec, speakerTile } from "../util/waveform.js";
-import { error, guard, ToolResult } from "../util/result.js";
+import { buildStudioGallery } from "../dota/studio.js";
+import { serveDir, StaticServer } from "../dota/serve.js";
+import { startQuickTunnel, Tunnel } from "../dota/tunnel.js";
+import { json, error, guard, ToolResult } from "../util/result.js";
 
 type Kind = "auto" | "texture" | "particle" | "model";
 const EXT: Record<Exclude<Kind, "auto">, string> = { texture: "vtex_c", particle: "vpcf_c", model: "vmdl_c" };
@@ -209,13 +212,18 @@ export function registerPreviewTools(server: McpServer) {
               card.rgba = p.rgba;
             }
           } else if (m.kind === "model") {
-            const out = await vrfDecode(vpk, m.path, dd, { glb: true });
+            // Decode into a KEPT per-model dir: the .glb references its textures as sibling
+            // .png files by relative uri, so glb + textures must stay together and be served.
+            const mdlDir = join(outDir, `mdl${i}`);
+            const out = await vrfDecode(vpk, m.path, mdlDir, { glb: true });
             const glb = out.find((f) => f.endsWith(".glb"));
             if (glb) {
-              const rel = `model_${glbN++}.glb`;
-              await copyFile(glb, join(outDir, rel)).catch(() => {});
-              card.glb = rel;
-            } else card.note = "model export failed";
+              glbN++;
+              card.glb = `mdl${i}/` + relative(mdlDir, glb).split(sep).join("/");
+            } else {
+              await rm(mdlDir, { recursive: true, force: true }).catch(() => {});
+              card.note = "model export failed";
+            }
           } else {
             // particle: decompile, find a texture ref, decode it (game vpk, else base pak).
             const text = await vrfDecompileText(vpk, m.path);
@@ -402,6 +410,80 @@ export function registerPreviewTools(server: McpServer) {
           sounds: sounds.map(({ wave, audioUri, waveUri, ...s }) => s), // drop heavy blobs/pixels
         },
       };
+    }),
+  );
+
+  // One live gallery at a time (server + optional tunnel persist across calls).
+  let live: { srv: StaticServer; tun?: Tunnel; url: string } | undefined;
+  async function stopLive() {
+    if (!live) return;
+    try { live.tun?.stop(); } catch { /* ignore */ }
+    try { await live.srv.close(); } catch { /* ignore */ }
+    live = undefined;
+  }
+
+  server.registerTool(
+    "preview_studio",
+    {
+      title: "Interactive preview gallery + share link (particles animate, models 3D, sounds play)",
+      description:
+        "Build a rich, INTERACTIVE preview gallery from the downloaded games and expose it on a public share link " +
+        "(Cloudflare quick tunnel) so you can open it in any browser — including on your phone over remote-access. " +
+        "Particles are replayed live as animated additive billboards from their real .vpcf parameters (sprite, " +
+        "emission, lifespan, size-over-life, colour, gravity) — they MOVE and GLOW, not flat sprites; models are " +
+        "interactive 3D (rotate); sounds get a real audio player (choose by hearing). Pass a query to theme it " +
+        "(e.g. 'explosion', 'tower', 'fire'). Set share=false for a local-only URL. First run auto-installs the " +
+        "decoder + cloudflared. Re-running replaces the previous gallery; preview_studio_stop tears it down.",
+      inputSchema: {
+        query: z.string().optional().describe("Theme the mix, e.g. 'explosion', 'fire', 'tower'. Omit for a varied sample."),
+        id: z.string().optional().describe("Restrict to one game id."),
+        particles: z.number().int().min(0).max(40).optional().describe("Max particles (default 10)."),
+        models: z.number().int().min(0).max(40).optional().describe("Max models (default 8)."),
+        sounds: z.number().int().min(0).max(40).optional().describe("Max sounds (default 10)."),
+        textures: z.number().int().min(0).max(40).optional().describe("Max textures (default 10)."),
+        share: z.boolean().optional().describe("Expose a public Cloudflare tunnel URL (default true). false = local 127.0.0.1 URL only."),
+      },
+    },
+    guard(async ({ query, id, particles, models, sounds, textures, share }): Promise<ToolResult> => {
+      await stopLive();
+      const r = await buildStudioGallery({ query, id, particles, models, sounds, textures });
+      const total = r.counts.particles + r.counts.models + r.counts.sounds + r.counts.textures;
+      if (!total) return error(`Nothing to preview${query ? ` for "${query}"` : ""}. Download/unpack more games, or broaden the query.`);
+      const srv = await serveDir(r.dir);
+      let url = srv.url;
+      let tun: Tunnel | undefined;
+      let shareNote = "local only (share=false)";
+      if (share !== false) {
+        try {
+          tun = await startQuickTunnel(srv.url);
+          url = tun.url;
+          shareNote = "public Cloudflare tunnel — open on any device";
+        } catch (e) {
+          shareNote = `tunnel failed (${e instanceof Error ? e.message : e}); serving locally instead`;
+        }
+      }
+      live = { srv, tun, url };
+      const c = r.counts;
+      const summary =
+        `Live preview gallery: ${url}\n` +
+        `${shareNote}\n` +
+        `Contents: ${c.particles} particles (animated), ${c.models} models (3D), ${c.sounds} sounds (player), ${c.textures} textures.\n` +
+        `Stays up until preview_studio_stop or the server restarts. Local: ${srv.url}`;
+      return json({ url, local: srv.url, shared: !!tun, counts: c, dir: r.dir }, summary);
+    }),
+  );
+
+  server.registerTool(
+    "preview_studio_stop",
+    {
+      title: "Stop the live preview gallery",
+      description: "Tear down the running preview_studio gallery (closes the local server and the Cloudflare tunnel).",
+      inputSchema: {},
+    },
+    guard(async (): Promise<ToolResult> => {
+      const was = live?.url;
+      await stopLive();
+      return json({ stopped: !!was, was }, was ? `Stopped preview gallery (${was}).` : "No live gallery was running.");
     }),
   );
 }

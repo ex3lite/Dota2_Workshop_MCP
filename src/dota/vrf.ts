@@ -66,7 +66,11 @@ export async function vrfDecode(vpk: string, innerPath: string, outDir: string, 
   await mkdir(outDir, { recursive: true });
   const before = new Set(await walk(outDir));
   const args = ["-i", vpk, "-f", innerPath, "-d", "-o", outDir];
-  if (opts.glb || /\.vmdl(_c)?$/i.test(innerPath)) args.push("--gltf_export_format", "glb");
+  if (opts.glb || /\.vmdl(_c)?$/i.test(innerPath)) {
+    // Embed materials + textures in the GLB so models render with their skins (not white),
+    // and adapt textures to the glTF spec (e.g. split metallic maps).
+    args.push("--gltf_export_format", "glb", "--gltf_export_materials", "--gltf_textures_adapt");
+  }
   await run(exe, args, { timeoutMs: 180_000, maxOutputChars: 200_000 });
   const after = await walk(outDir);
   const wantExt = OUT_EXT[innerPath.replace(/^.*\./, "").toLowerCase()] ?? null;
