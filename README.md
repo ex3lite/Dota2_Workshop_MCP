@@ -11,7 +11,7 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: working — **101 tools**, end-to-end tested. It can search the Workshop for custom games by
+> Status: working — **103 tools**, end-to-end tested. It can search the Workshop for custom games by
 > name and download them outside the client (SteamCMD) to study, generates whole playable maps from a spec
 > (terrain shaping via the Dota tile grid + entities + waypoint paths → compile → .vpk), previews them
 > top-down as an image without launching the game, edits KV1 + KV3 (soundevents/particles) data, reads
@@ -37,12 +37,12 @@ fallback for non-tstl addons.
 | **Live debug loop** | `dota_send_console_command`, `dota_read_console_log`, `dota_reload_scripts`, `dota_restart_game`, `dota_dev_cycle`, `dota_screenshot`, `dota_watch_errors`, `dota_wait_for`, `dota_perf` |
 | **Window & input** | `dota_window`, `dota_focus_window`, `dota_click`, `dota_type`, `dota_input` |
 | **In-game DebugSDK** | `addon_attach_debug_sdk`, `addon_detach_debug_sdk`, `dota_lua_eval`, `dota_debug_dump`, `dota_selftest` |
-| **Reference library** | `ref_harvest`, `ref_harvest_top`, `ref_list`, `ref_search`, `ref_find`, `ref_passport`, `ref_inspect`, `ref_get`, `ref_recipe`, `ref_curate`, `ref_stats` |
+| **Reference library** | `ref_harvest`, `ref_harvest_top`, `ref_list`, `ref_search`, `ref_find`, `ref_passport`, `ref_inspect`, `ref_get`, `ref_recipe`, `ref_curate`, `ref_stats`, `asset_db` (SQLite index: fast structured search by kind/ext/name) |
 | **Docs & references** | `docs_search`, `docs_get`, `docs_list`, `dota_patterns`, `panorama_api_search`, `panorama_api_get`, `tools_catalog` |
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
 | **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog`, `scaffold_td` |
 | **Reference games** | `workshop_search`, `workshop_download`, `workshop_list`, `workshop_inspect`, `workshop_read`, `workshop_grep`, `panorama_decompile` |
-| **Asset preview (out of engine)** | `asset_preview` — decode particles/textures/models via ValveResourceFormat into a browsable HTML gallery (no Dota launch) |
+| **Asset preview (out of engine)** | `asset_preview` (particles/textures/models → inline contact-sheet image + HTML gallery), `sound_preview` (sounds → inline waveform/icon image + playable HTML soundboard + inline audio) — decoded via ValveResourceFormat, no Dota launch |
 | **Sounds & KV3** | `soundevents_list`, `soundevents_get`, `soundevents_upsert`, `kv3_read` |
 | **Assets & base game** | `assets_list`, `assets_search`, `vpk_find`, `vpk_read`, `base_kv_entry` |
 | **Events & net tables** | `scaffold_custom_event`, `scaffold_net_table` |
@@ -237,9 +237,31 @@ driven from outside the game:
   back to CSS/JS/XML source so you can study real shipping UI, animations and HUDs.
 - **Reference library** (`ref_harvest` / `ref_search` / …) — collect games into a persistent, quality-scored,
   topic-classified local code library (including decompiled Panorama UI) and search across all of it on demand.
+- **`asset_db`** — a SQLite index of **every file across all unpacked games**, so finding any
+  model/particle/sound/texture by **kind/extension/name** is a fast structured query instead of a scan.
+  `action=search` (default) / `stats` / `rebuild`; auto-updates on download/unpack. e.g.
+  `asset_db query="tower" kind="model"`.
 
 So you can go from *"how does a popular TD spawn waves?"* to reading its actual `waves.lua` in a couple
 of calls.
+
+### Preview assets without launching Dota
+
+Eyeball particles, textures, models and sounds straight from the downloaded games — decoded
+out-of-engine via [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat)
+(auto-installs on first use, Windows). Both tools return an **inline image in chat** (a numbered
+contact sheet), so previews are viewable **over remote-access** where opening a browser isn't possible,
+*and* write a self-contained HTML page for richer local viewing.
+
+- **`asset_preview`** — find matching particles (`.vpcf`), textures (`.vtex`) or models (`.vmdl`),
+  decode them (textures → PNG, models → GLB, particles → their sprite texture), and return a numbered
+  contact-sheet image inline + an HTML gallery with interactive 3D `<model-viewer>` for models. e.g.
+  `asset_preview query="spark" kind="particle"`.
+- **`sound_preview`** — find matching sounds (`.vsnd`), decode them, and return an inline image (a real
+  amplitude waveform for the rare PCM sound; a labelled speaker tile + accurate duration for MP3, the
+  usual Dota codec — MP3 can't be waveformed out-of-engine) + an HTML **soundboard** with a real
+  `<audio>` player per sound; small sounds are also embedded inline as playable audio. e.g.
+  `sound_preview query="explosion"`.
 
 ## Built-in references (offline)
 
