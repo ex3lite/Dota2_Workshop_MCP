@@ -15,7 +15,9 @@ import {
   libraryStats,
   getPassport,
   findFiles,
+  rebuildAssetDb,
 } from "../dota/reflib.js";
+import { searchAssets, assetDbStats } from "../dota/assetdb.js";
 import { resolveDataPath } from "../util/datapath.js";
 import { json, error, guard, ToolResult } from "../util/result.js";
 
@@ -289,6 +291,56 @@ export function registerReflibTools(server: McpServer) {
         lines.push("", "REFERENCE CODE: none in the local library yet — run ref_harvest to collect games, then re-run.");
       }
       return json({ query, patterns, references: refs }, lines.join("\n"));
+    }),
+  );
+
+  server.registerTool(
+    "asset_db",
+    {
+      title: "Asset index (SQLite): fast structured search / stats / rebuild",
+      description:
+        "Query the SQLite asset index — every file across ALL unpacked games, indexed for fast structured lookup by " +
+        "KIND (model, texture, material, particle, sound, soundevent, map, script, kv, panorama, animation), extension, " +
+        "name and game. Much faster than scanning when the library is large. Actions: 'search' (default) finds assets " +
+        "by name/path with optional kind/ext/id filters; 'stats' shows totals by kind/extension; 'rebuild' regenerates " +
+        "the index from the library (rarely needed — it auto-updates on download/unpack). e.g. asset_db query=\"tower\" " +
+        "kind=\"model\".",
+      inputSchema: {
+        action: z.enum(["search", "stats", "rebuild"]).optional().describe("Default 'search'."),
+        query: z.string().optional().describe("Name/path substring (for action=search)."),
+        kind: z.enum(["model", "texture", "material", "particle", "sound", "soundevent", "map", "script", "kv", "panorama", "animation", "other"]).optional(),
+        ext: z.string().optional().describe("Exact extension, e.g. 'vmdl_c', 'vpcf', 'png'."),
+        id: z.string().optional().describe("Restrict to one game id."),
+        limit: z.number().int().positive().max(1000).optional().describe("Max rows (default 100)."),
+      },
+    },
+    guard(async ({ action, query, kind, ext, id, limit }): Promise<ToolResult> => {
+      const act = action ?? "search";
+      if (act === "rebuild") {
+        const r = await rebuildAssetDb();
+        return json(r, `Rebuilt asset index: ${r.games} games, ${r.assets.toLocaleString()} assets.`);
+      }
+      if (act === "stats") {
+        const s = assetDbStats();
+        const lines = [
+          `${s.assets.toLocaleString()} assets across ${s.games} games.`,
+          `by kind: ${Object.entries(s.byKind).map(([k, n]) => `${k}:${n}`).join("  ") || "—"}`,
+          `top ext: ${s.byExt.map((e) => `${e.ext || "(none)"}:${e.count}`).join("  ")}`,
+          `db: ${s.dbPath}`,
+        ];
+        return json(s as unknown as Record<string, unknown>, lines.join("\n"));
+      }
+      // search
+      if (!query && !kind && !ext && !id) return error("Provide at least one of: query, kind, ext, id.");
+      let hits = searchAssets({ query, kind, ext, id, limit });
+      if (!hits.length) {
+        // index may be empty/stale — rebuild once and retry
+        const r = await rebuildAssetDb();
+        if (r.assets) hits = searchAssets({ query, kind, ext, id, limit });
+      }
+      if (!hits.length) return error(`No assets matching ${[query && `"${query}"`, kind && `kind=${kind}`, ext && `.${ext}`, id && `id=${id}`].filter(Boolean).join(" ") || "(filters)"}. (Download/unpack more games, or asset_db action=rebuild.)`);
+      const lines = hits.map((h) => `  [${h.kind}] ${h.title} (${h.game_id})  ${h.path}`);
+      return json({ action: act, count: hits.length, results: hits }, lines.join("\n"));
     }),
   );
 

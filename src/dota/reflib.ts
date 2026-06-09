@@ -19,6 +19,7 @@ import { decompilePanorama, isCompiledPanorama, panoramaSourcePath } from "./pan
 import { requireDotaPaths } from "./paths.js";
 import { steamcmdWorkshopDir, downloadWorkshopItem } from "./steamcmd.js";
 import { searchWorkshop, workshopDetails, WorkshopHit } from "./workshop.js";
+import { indexGame, removeGameFromDb, searchAssets, indexedGameIds } from "./assetdb.js";
 
 export interface ReflibItem {
   id: string;
@@ -381,7 +382,36 @@ export async function ingestItem(
   index.items = index.items.filter((i) => i.id !== id);
   index.items.push(item);
   await saveIndex(index);
+
+  // Mirror the full file list into the SQLite asset index (best-effort; it's a rebuildable
+  // cache, so a failure here must never break ingestion).
+  try {
+    indexGame(id, item.title, allPaths);
+  } catch {
+    /* index can be rebuilt later via asset_db action=rebuild */
+  }
   return item;
+}
+
+/**
+ * Rebuild the SQLite asset index from every game's all-files.txt. The DB is a cache derived
+ * from the reference library, so this can always reconstruct it from scratch.
+ */
+export async function rebuildAssetDb(): Promise<{ games: number; assets: number }> {
+  const index = await loadIndex();
+  let games = 0;
+  let assets = 0;
+  for (const it of index.items) {
+    let paths: string[];
+    try {
+      paths = (await readFile(join(itemDir(it.id), "all-files.txt"), "utf8")).split("\n").filter(Boolean);
+    } catch {
+      continue; // no file list extracted for this game
+    }
+    assets += indexGame(it.id, it.title, paths);
+    games++;
+  }
+  return { games, assets };
 }
 
 export interface HarvestSummary {
@@ -537,6 +567,24 @@ export interface FileHit {
  * complement to searchLibrary (which searches text CONTENT).
  */
 export async function findFiles(query: string, opts: { topic?: string; id?: string; ext?: string; limit?: number } = {}): Promise<FileHit[]> {
+  // Fast path: the SQLite asset index. Skipped when a topic filter is requested (topics are
+  // a reflib-only classification not stored in the DB). Lazily builds the cache on first use.
+  if (!opts.topic) {
+    try {
+      let ids = indexedGameIds();
+      if (ids.size === 0) {
+        await rebuildAssetDb();
+        ids = indexedGameIds();
+      }
+      if (ids.size > 0) {
+        const rows = searchAssets({ query, ext: opts.ext, id: opts.id, limit: opts.limit ?? 80 });
+        return rows.map((r) => ({ id: r.game_id, title: r.title ?? "(unknown)", path: r.path }));
+      }
+    } catch {
+      /* fall through to the all-files.txt scan */
+    }
+  }
+
   const index = await loadIndex();
   let items = index.items;
   if (opts.id) items = items.filter((i) => i.id === opts.id);
@@ -577,7 +625,10 @@ export async function curateLibrary(opts: { minScore?: number; dryRun?: boolean 
   for (const item of index.items) {
     if (item.score < minScore || item.metrics.obfuscated) {
       removed.push({ id: item.id, title: item.title, score: item.score, reason: item.metrics.obfuscated ? "obfuscated" : `score < ${minScore}` });
-      if (!opts.dryRun) await rm(itemDir(item.id), { recursive: true, force: true }).catch(() => {});
+      if (!opts.dryRun) {
+        await rm(itemDir(item.id), { recursive: true, force: true }).catch(() => {});
+        try { removeGameFromDb(item.id); } catch { /* cache only */ }
+      }
     } else {
       keep.push(item);
     }
