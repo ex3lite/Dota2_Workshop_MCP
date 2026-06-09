@@ -7,6 +7,7 @@ import { configuredAddonDir, resolveProject } from "../config.js";
 import { pathExists } from "../util/fsx.js";
 import { parseKV, getWrapperBlock, blockToObject } from "../kv/index.js";
 import { readTextFile } from "../util/fsx.js";
+import { auditAddon } from "../dota/audit.js";
 import { json, text, error, guard, ToolResult } from "../util/result.js";
 
 async function listAddons(dir: string): Promise<string[]> {
@@ -127,6 +128,34 @@ export function registerDiagnosticsTools(server: McpServer) {
       const block = getWrapperBlock(doc);
       const data = block ? blockToObject(block) : {};
       return json({ addon, path, info: data }, `${path}\n\n${JSON.stringify(data, null, 2)}`);
+    }),
+  );
+
+  server.registerTool(
+    "addon_audit",
+    {
+      title: "Audit the addon for common mistakes",
+      description:
+        "Static best-practice audit (no game needed), encoding lessons from shipping games: dead custom events " +
+        "(client fires an event with no server listener), missing Precache, chatty net-table writes with no debounce, " +
+        "Panorama layouts missing from custom_ui_manifest.xml, and non-hidden abilities/items with no tooltip token " +
+        "in any addon_*.txt locale. Returns findings with severity + a fix suggestion (often a scaffold_* tool).",
+      inputSchema: {
+        projectRoot: z.string().optional(),
+        severity: z.enum(["all", "warn"]).optional().describe("'warn' shows only warnings; default 'all'."),
+      },
+    },
+    guard(async ({ projectRoot, severity }): Promise<ToolResult> => {
+      const project = await resolveProject(projectRoot);
+      const { findings, scanned } = await auditAddon(project);
+      const filtered = severity === "warn" ? findings.filter((f) => f.severity === "warn") : findings;
+      const warns = findings.filter((f) => f.severity === "warn").length;
+      const header = `Audited ${project.addonName}: scanned ${scanned.vscripts} vscripts + ${scanned.panorama} panorama files. ${warns} warning(s), ${findings.length - warns} info.`;
+      if (!filtered.length) return json({ project: project.addonName, scanned, findings: [] }, `${header}\nNo issues found. 🎉`);
+      const body = filtered
+        .map((f) => `  [${f.severity.toUpperCase()}] ${f.rule}: ${f.message}${f.file ? `\n      file: ${f.file}` : ""}${f.suggestion ? `\n      fix: ${f.suggestion}` : ""}`)
+        .join("\n");
+      return json({ project: project.addonName, scanned, findings: filtered }, `${header}\n\n${body}`);
     }),
   );
 }

@@ -10,6 +10,16 @@ import {
   scaffoldPanoramaPanel,
   ScaffoldResult,
 } from "../scaffold/scaffolders.js";
+import {
+  scaffoldNotifications,
+  scaffoldNetTableBinding,
+  scaffoldRpc,
+  scaffoldSaveCodes,
+  scaffoldHudPanel,
+  scaffoldWaveSystem,
+  scaffoldShop,
+  scaffoldTalentTree,
+} from "../scaffold/systems.js";
 import { json, guard, ToolResult } from "../util/result.js";
 
 const numOrStr = z.union([z.string(), z.number()]);
@@ -170,6 +180,163 @@ export function registerScaffoldTools(server: McpServer) {
       const project = await resolveProject(args.projectRoot);
       const r = await scaffoldPanoramaPanel(project, args as any);
       return renderResult(`Scaffolded panorama panel "${args.name}".`, r);
+    }),
+  );
+
+  // ---- systems scaffolders (distilled from shipping games) ----------------
+  server.registerTool(
+    "scaffold_notifications",
+    {
+      title: "Scaffold a notification/toast system",
+      description:
+        "Generate a reusable toast / kill-feed bus distilled from shipping games: a Panorama panel (XML+CSS+JS) with " +
+        "the pop-in scale-overshoot animation + upward-growing stack + fly-out, and a server-side `Notifications` Lua " +
+        "module (Notifications:All/ToPlayer/ToTeam/Good/Bad) that drives it via custom game events. See the " +
+        "panorama/animations-cookbook + hud-ux-patterns docs.",
+      inputSchema: {
+        projectRoot: z.string().optional(),
+        name: z.string().optional().describe("Base name for the files (default 'mcp_notifications')."),
+        overwrite: z.boolean().optional(),
+      },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldNotifications(project, args as any);
+      return renderResult("Scaffolded notification system.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_nettable_binding",
+    {
+      title: "Scaffold net-table sync helpers",
+      description:
+        "Generate the net-table glue used by polished games: a client JS helper (prime-and-subscribe — avoids the " +
+        "'UI misses the first value' bug — plus a whole-table variant) and a server `NetSync` Lua module with a " +
+        "frame-debounced writer (collapses many same-frame writes into one push). See scripting/custom-game-architecture.",
+      inputSchema: {
+        projectRoot: z.string().optional(),
+        table: z.string().optional().describe("Example net-table name to reference in the generated comments."),
+        overwrite: z.boolean().optional(),
+      },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldNetTableBinding(project, args as any);
+      return renderResult("Scaffolded net-table sync helpers.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_rpc",
+    {
+      title: "Scaffold an RPC layer (client⇄server)",
+      description:
+        "Generate request/response RPC over Dota's one-way custom events: a client helper (correlation-id, optional " +
+        "timeout) and a server `Rpc` Lua router that runs handlers in coroutine.wrap+xpcall (so they can yield on " +
+        "HTTP for a backend, and crashes don't kill the listener) and replies by id. See the dota_patterns KB.",
+      inputSchema: { projectRoot: z.string().optional(), overwrite: z.boolean().optional() },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldRpc(project, args as any);
+      return renderResult("Scaffolded RPC layer.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_save_codes",
+    {
+      title: "Scaffold a save/load code system",
+      description:
+        "Generate a persistence system distilled from shipping games: a self-contained `SaveCodes` Lua module that " +
+        "encodes a flat map of integer fields into a shareable, checksum-protected code (pure-Lua URL-safe base64, no " +
+        "deps) and decodes/validates it — plus an HTTP-backend variant using the net-table-delivered server-key " +
+        "pattern for server-authoritative persistence. See the dota_patterns KB + scripting/custom-game-architecture.",
+      inputSchema: {
+        projectRoot: z.string().optional(),
+        fields: z.array(z.string()).optional().describe("Ordered integer save fields (default level, gold, wins, unlocks)."),
+        overwrite: z.boolean().optional(),
+      },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldSaveCodes(project, args as any);
+      return renderResult("Scaffolded save-code system.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_hud_panel",
+    {
+      title: "Scaffold an animated HUD panel",
+      description:
+        "Create a Panorama panel preloaded with the reusable micro-interactions from the cookbook: a class-driven " +
+        "fly-in, GPU-cheap hover pop, an infinite rarity glow, a gradient title, and a net-table binding example " +
+        "(XML + CSS + JS). A richer alternative to scaffold_panorama_panel for HUD work.",
+      inputSchema: {
+        projectRoot: z.string().optional(),
+        name: z.string().describe("Panel name (file names + ids)."),
+        overwrite: z.boolean().optional(),
+      },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldHudPanel(project, args as any);
+      return renderResult(`Scaffolded HUD panel "${args.name}".`, r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_wave_system",
+    {
+      title: "Scaffold a wave/round spawner",
+      description:
+        "Generate a declarative, data-driven wave/round spawner (survival/horde/arena) distilled from shipping games: " +
+        "a `Waves` Lua module with a tunable WAVES table, a boss every N rounds, prep timers, live round-state on a " +
+        "net table, and clear/leak callbacks — spawns at a named map entity. For tower-defense pathing use scaffold_td.",
+      inputSchema: { projectRoot: z.string().optional(), overwrite: z.boolean().optional() },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldWaveSystem(project, args as any);
+      return renderResult("Scaffolded wave system.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_shop",
+    {
+      title: "Scaffold a shop / store",
+      description:
+        "Generate an in-game shop: a Panorama grid panel (item cards with hover pop, item icons, cost, native " +
+        "tooltips) that reads its catalog from a net table, plus a server `Shop` Lua module that publishes the " +
+        "catalog and validates purchases (gold check + grant) replying via a custom event. Edit Shop.ITEMS to set " +
+        "the catalog.",
+      inputSchema: { projectRoot: z.string().optional(), overwrite: z.boolean().optional() },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldShop(project, args as any);
+      return renderResult("Scaffolded shop.", r);
+    }),
+  );
+
+  server.registerTool(
+    "scaffold_talent_tree",
+    {
+      title: "Scaffold a talent / upgrade tree",
+      description:
+        "Generate a tiered talent/upgrade tree: a Panorama panel rendering tiers of nodes with locked/available/" +
+        "picked states (rarity glow on available), and a server `TalentTree` Lua module that validates picks (points " +
+        "+ prerequisites), applies effects (hook in :Apply), and syncs per-player state via a net table. Edit " +
+        "TalentTree.NODES to design the tree.",
+      inputSchema: { projectRoot: z.string().optional(), overwrite: z.boolean().optional() },
+    },
+    guard(async (args): Promise<ToolResult> => {
+      const project = await resolveProject(args.projectRoot);
+      const r = await scaffoldTalentTree(project, args as any);
+      return renderResult("Scaffolded talent tree.", r);
     }),
   );
 }
