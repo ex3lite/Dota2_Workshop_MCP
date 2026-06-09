@@ -51,6 +51,24 @@ Notes:
   it's not the engine renderer. Models carry their textures when those are bundled in the game's
   VPK; models reusing base-Dota textures render untextured (the textures aren't in that VPK).
 
+## C) Record MOTION (animated GIF in chat)
+
+A static screenshot can't show a particle effect playing or gameplay moving. To show **motion**
+directly in chat, record a short clip:
+
+- `dota_record seconds=5 fps=12 width=480 target="game"` — records the **Dota window** (default;
+  it finds the window, brings it to the foreground, grabs just that region) or `target="screen"`
+  for the whole desktop. Returns a `.gif` path.
+- **Length presets** (pick by what you're showing): `3` (a single cast/burst), `5` (default — one
+  effect or action), `10` (a short sequence), `15` (a wave / rotation), `30` (a longer clip — drop
+  `fps` to ~8–10 to keep the GIF small enough for Read to render smoothly).
+- **Then `Read` that path** — an animated GIF opened with the Read tool **plays animated inline**
+  in chat. (This is the one way to show motion: a GIF/MP4 sent as a *file* does NOT animate; Read
+  does. Read also can't open mp4/webm — GIF is the format that works.)
+- Needs Dota in **Windowed/Borderless** (gdigrab can't grab exclusive-fullscreen). Uses ffmpeg
+  (auto-installs on first use, Windows). Keep clips short (≤ ~6s, 12fps, 480px) so the file stays
+  small and Read renders it smoothly.
+
 ## Security
 
 The Cloudflare link is **public** — anyone with it can view (and the gallery server runs on the

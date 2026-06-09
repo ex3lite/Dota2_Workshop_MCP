@@ -16,6 +16,7 @@ import { registerControlTools } from "./tools/control.tools.js";
 import { registerDebugSdkTools } from "./tools/debugsdk.tools.js";
 import { registerReflibTools } from "./tools/reflib.tools.js";
 import { registerPreviewTools } from "./tools/preview.tools.js";
+import { registerRecordTools } from "./tools/record.tools.js";
 import { apiStats } from "./api/search.js";
 import { panoramaStats } from "./api/panorama.js";
 
@@ -41,6 +42,7 @@ export function createServer(): McpServer {
   registerDebugSdkTools(server);
   registerReflibTools(server);
   registerPreviewTools(server);
+  registerRecordTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(

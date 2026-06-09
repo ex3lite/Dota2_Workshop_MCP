@@ -134,3 +134,106 @@ export async function captureDotaWindowPng(): Promise<Buffer | undefined> {
   const r = await captureWindowPng("screen", false);
   return r.buf;
 }
+
+export interface WindowRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// Compact rect-finder: same EnumWindows-by-PID strategy as PS_SCRIPT (largest window titled
+// exactly "Dota 2", falling back to the largest window of the process). Optionally brings the
+// window to the foreground so a subsequent screen-region grab isn't occluded by other windows.
+const PS_RECT = String.raw`param([string]$Focus)
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class WinRect {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  public static IntPtr Found; public static uint TargetPid; public static long FoundArea; public static bool FoundTitled;
+  private static bool EnumCb(IntPtr h, IntPtr l) {
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    if (pid != TargetPid) return true;
+    RECT r; GetWindowRect(h, out r);
+    int w = r.Right - r.Left, ht = r.Bottom - r.Top;
+    if (w <= 100 || ht <= 100) return true;
+    var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+    bool titled = sb.ToString() == "Dota 2";
+    long area = (long)w * ht;
+    if ((titled && !FoundTitled) || (titled == FoundTitled && area > FoundArea)) { Found = h; FoundArea = area; FoundTitled = titled; }
+    return true;
+  }
+  public static IntPtr FindByPid(uint pid) { TargetPid = pid; Found = IntPtr.Zero; FoundArea = 0; FoundTitled = false; EnumWindows(new EnumWindowsProc(EnumCb), IntPtr.Zero); return Found; }
+}
+"@
+[void][WinRect]::SetProcessDPIAware()
+$p = Get-Process dota2 -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $p) { throw 'dota2.exe is not running' }
+$h = $p.MainWindowHandle
+if ($h -eq 0 -or $h -eq [IntPtr]::Zero) { $h = [WinRect]::FindByPid([uint32]$p.Id) }
+if ($h -eq 0 -or $h -eq [IntPtr]::Zero) { throw 'dota2 has no visible window (minimized or exclusive fullscreen)' }
+if ($Focus -eq 'true') {
+  if ([WinRect]::IsIconic($h)) { [void][WinRect]::ShowWindow($h, 9) }
+  $fg = [WinRect]::GetForegroundWindow()
+  $tFg = [WinRect]::GetWindowThreadProcessId($fg, [IntPtr]::Zero)
+  $tCur = [WinRect]::GetCurrentThreadId()
+  [void][WinRect]::AttachThreadInput($tCur, $tFg, $true)
+  [void][WinRect]::BringWindowToTop($h)
+  [void][WinRect]::SetForegroundWindow($h)
+  [void][WinRect]::ShowWindow($h, 5)
+  [void][WinRect]::AttachThreadInput($tCur, $tFg, $false)
+  Start-Sleep -Milliseconds 350
+}
+$r = New-Object WinRect+RECT
+[void][WinRect]::GetWindowRect($h, [ref]$r)
+$w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top
+if ($w -le 0 -or $ht -le 0) { throw 'bad window size' }
+Write-Output (ConvertTo-Json -Compress @{ left = $r.Left; top = $r.Top; width = $w; height = $ht })
+`;
+
+/**
+ * Find the dota2 window's screen rectangle (for gdigrab region recording). gdigrab's
+ * offset_x/offset_y are raw primary-monitor screen coordinates matching GetWindowRect, so the
+ * returned rect can be used directly. Returns null if dota isn't running or has no visible window
+ * (minimized / exclusive-fullscreen). When focus=true, brings the window to the foreground first
+ * so the recorded region isn't occluded by other windows.
+ */
+export async function getDotaWindowRect(focus = true): Promise<WindowRect | null> {
+  if (process.platform !== "win32") return null;
+  const dir = await mkdtemp(join(tmpdir(), "d2rect-"));
+  const ps1 = join(dir, "rect.ps1");
+  try {
+    await writeFile(ps1, PS_RECT, "utf8");
+    const res = await run(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, focus ? "true" : "false"],
+      { timeoutMs: 20_000 },
+    );
+    const m = res.stdout.match(/\{[^}]*\}/);
+    if (!m) return null;
+    const r = JSON.parse(m[0]) as WindowRect;
+    if (!r || !(r.width > 0) || !(r.height > 0)) return null;
+    return r;
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
