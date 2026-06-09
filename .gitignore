@@ -7,3 +7,8 @@ dist/
 # local scratch
 .shot.png
 *.local.png
+
+# harness / scratch
+.claude/
+exceptions.txt
+analysis/_*.log
