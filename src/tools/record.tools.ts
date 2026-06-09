@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { mkdir, stat, rm } from "node:fs/promises";
 import { ensureFfmpeg } from "../dota/ffmpeg.js";
 import { getDotaWindowRect } from "../dota/capture.js";
+import { dotaBlockerHint } from "../dota/diagnose.js";
 import { run } from "../dota/process.js";
 import { json, error, guard, ToolResult } from "../util/result.js";
 
@@ -69,7 +70,8 @@ export function registerRecordTools(server: McpServer) {
               ? "Captured the Dota window region but got no frames — is it in exclusive-fullscreen? Try Borderless/Windowed, or target='screen'."
               : "Couldn't find the Dota window (not running, minimized, or exclusive-fullscreen). Try target='screen'."
             : "Screen capture failed.";
-        return error(`No clip captured. ${hint}\nffmpeg: ${(cap.stderr || cap.stdout).slice(-400)}`);
+        const blocker = await dotaBlockerHint();
+        return error(`No clip captured. ${hint}${blocker}\nffmpeg: ${(cap.stderr || cap.stdout).slice(-400)}`);
       }
 
       const gifVf = `split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3`;

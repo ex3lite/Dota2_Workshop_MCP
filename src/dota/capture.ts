@@ -15,6 +15,7 @@ import { writeFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "./process.js";
+import { dotaBlockerHint } from "./diagnose.js";
 
 export type WindowCaptureMode = "screen" | "print";
 
@@ -119,7 +120,8 @@ export async function captureWindowPng(
     );
     const buf = await readFile(out).catch(() => undefined);
     if (!buf || !buf.length) {
-      return { mode, error: `Capture produced no image. ${res.stderr.slice(-300) || res.stdout.slice(-300)}`.trim() };
+      const blocker = await dotaBlockerHint();
+      return { mode, error: `Capture produced no image. ${res.stderr.slice(-300) || res.stdout.slice(-300)}`.trim() + blocker };
     }
     return { buf, mode };
   } catch (err) {

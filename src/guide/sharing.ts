@@ -100,4 +100,6 @@ SHOWING / SHARING / RECORDING ASSETS — the most common request. Choose by inte
 
 Honest limits: models don't rasterize as inline images (gallery only); MP3 has no out-of-engine waveform (speaker tile + duration); gallery particles are an additive-billboard approximation, not the engine renderer; gdigrab can't capture exclusive-fullscreen (use Windowed/Borderless). The Cloudflare link is PUBLIC — share only with the user's own devices.
 
+STUCK GAME / EMPTY CAPTURES — if a screenshot or recording comes back empty, or the game seems hung (low RAM, flat CPU), the Source 2 tools are probably blocked on a HIDDEN modal dialog (an engine assert, a watchdog "Stall Detected", or a crash) spawned as a separate window BEHIND the main one. Run dota_diagnose: it enumerates all of the process's windows, reads the assert text, and flags the blocker. dota_dismiss_dialog clicks a safe button (e.g. "Ignore All Asserts") to unblock the main thread so loading/rendering resumes, then retry the capture.
+
 Full how-to: read the resource dota://guide/sharing, or invoke the prompt share_assets (or record_motion).`;
