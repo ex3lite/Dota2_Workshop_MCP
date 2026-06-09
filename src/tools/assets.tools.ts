@@ -5,6 +5,7 @@ import { readdir } from "node:fs/promises";
 import { resolveProject } from "../config.js";
 import { requireDotaPaths } from "../dota/paths.js";
 import { openDotaVpk } from "../dota/vpk.js";
+import { decompilePanorama, isCompiledPanorama } from "../dota/panorama-decompile.js";
 import { parseKV, getWrapperBlock, findPair, blockToObject, listBases, isBlock } from "../kv/index.js";
 import { pathExists } from "../util/fsx.js";
 import { json, error, guard, ToolResult } from "../util/result.js";
@@ -52,8 +53,14 @@ export function registerAssetTools(server: McpServer) {
     guard(async ({ projectRoot, type }): Promise<ToolResult> => {
       const project = await resolveProject(projectRoot);
       const files: string[] = [];
+      // Each root gets its OWN budget so a huge content/ dir can't starve game/ (where
+      // compiled vmdl_c/vtex_c etc. live) and silently drop a whole asset class.
       for (const root of [project.contentDir, project.gameDir]) {
-        if (await pathExists(root)) await walk(root, project.root, files, 5000);
+        if (await pathExists(root)) {
+          const part: string[] = [];
+          await walk(root, project.root, part, 5000);
+          files.push(...part);
+        }
       }
       const byExt = new Map<string, string[]>();
       for (const f of files) {
@@ -89,7 +96,11 @@ export function registerAssetTools(server: McpServer) {
       const project = await resolveProject(projectRoot);
       const files: string[] = [];
       for (const root of [project.contentDir, project.gameDir]) {
-        if (await pathExists(root)) await walk(root, project.root, files, 10000);
+        if (await pathExists(root)) {
+          const part: string[] = [];
+          await walk(root, project.root, part, 10000);
+          files.push(...part);
+        }
       }
       const q = query.toLowerCase();
       let hits = files.filter((f) => f.toLowerCase().includes(q));
@@ -119,17 +130,20 @@ export function registerAssetTools(server: McpServer) {
     "vpk_read",
     {
       title: "Read a base-game file (VPK)",
-      description: "Read a text file from the base Dota content archive (pak01_dir.vpk), e.g. 'scripts/npc/npc_heroes.txt'.",
+      description:
+        "Read a text file from the base Dota content archive (pak01_dir.vpk), e.g. 'scripts/npc/npc_heroes.txt'. " +
+        "Compiled Panorama (.vcss_c/.vjs_c/.vxml_c) is auto-decompiled to source.",
       inputSchema: { path: z.string(), maxChars: z.number().int().positive().max(200000).optional() },
     },
     guard(async ({ path, maxChars }): Promise<ToolResult> => {
       const dota = await requireDotaPaths();
       const vpk = await openDotaVpk(dota.pak01DirVpk);
       try {
-        const txt = await vpk.readText(path);
+        const decompiled = isCompiledPanorama(path);
+        const txt = decompiled ? decompilePanorama(await vpk.read(path), path) : await vpk.readText(path);
         const cap = maxChars ?? 20000;
         return json(
-          { path, length: txt.length, truncated: txt.length > cap },
+          { path, decompiled, length: txt.length, truncated: txt.length > cap },
           txt.length > cap ? txt.slice(0, cap) + `\n... (${txt.length - cap} more chars; raise maxChars)` : txt,
         );
       } catch (e) {
