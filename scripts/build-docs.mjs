@@ -4,13 +4,16 @@
 // the Jekyll _articles collection in ModDota/moddota.github.io@source.
 // Run: npm run build:docs
 
-import { writeFile, mkdir, rm } from "node:fs/promises";
+import { writeFile, mkdir, rm, readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DOCS_DIR = join(__dirname, "..", "src", "data", "docs");
 const PAGES_DIR = join(DOCS_DIR, "pages");
+// Hand-authored pages that ship with the MCP (not fetched from ModDota). Merged in
+// after the fetch so they survive a re-run of build:data. Filename "cat__slug.md" -> id "cat/slug".
+const EXTRA_DIR = join(__dirname, "..", "src", "data", "docs-extra", "pages");
 
 const REPO = "ModDota/moddota.github.io";
 const BRANCH = "source";
@@ -122,12 +125,59 @@ async function main() {
     }
   }
 
+  // Merge hand-authored extra pages (bundled with the MCP).
+  const extra = await mergeExtraPages(index, usedFiles);
+  ok += extra;
+
   index.sort((a, b) => a.category.localeCompare(b.category) || a.title.localeCompare(b.title));
   await writeFile(join(DOCS_DIR, "index.json"), JSON.stringify({ generatedAt: new Date().toISOString(), count: index.length, pages: index }), "utf8");
 
   const byCat = {};
   for (const p of index) byCat[p.category] = (byCat[p.category] || 0) + 1;
   console.error(`Wrote ${ok} docs to ${DOCS_DIR}\n  categories: ${JSON.stringify(byCat)}`);
+}
+
+// Copy each src/data/docs-extra/pages/*.md into the bundle and index it.
+async function mergeExtraPages(index, usedFiles) {
+  let merged = 0;
+  let files = [];
+  try {
+    files = (await readdir(EXTRA_DIR)).filter((f) => /\.md$/i.test(f));
+  } catch {
+    return 0; // no extras directory — fine
+  }
+  for (const fileName of files) {
+    try {
+      const raw = await readFile(join(EXTRA_DIR, fileName), "utf8");
+      const { body, front } = stripFrontmatter(raw);
+      const cleaned = body.trim();
+      const id = fileName.replace(/\.md$/i, "").replace(/__/g, "/");
+      const category = id.includes("/") ? id.split("/")[0] : "general";
+      if (usedFiles.has(fileName)) {
+        console.error(`  ! extra "${fileName}" collides with a fetched page — skipping`);
+        continue;
+      }
+      usedFiles.set(fileName, id);
+      await writeFile(join(PAGES_DIR, fileName), cleaned, "utf8");
+      // Replace any existing entry with the same id, then add.
+      const existing = index.findIndex((p) => p.id === id);
+      if (existing >= 0) index.splice(existing, 1);
+      index.push({
+        id,
+        title: titleFrom(front, cleaned, id),
+        category,
+        summary: summaryOf(cleaned),
+        headings: headingsOf(cleaned),
+        file: fileName,
+        sourceUrl: front.sourceUrl || "bundled with dota2-workshop-mcp",
+      });
+      merged++;
+    } catch (err) {
+      console.error(`  ! extra ${fileName}: ${err.message}`);
+    }
+  }
+  if (merged) console.error(`Merged ${merged} hand-authored extra doc(s).`);
+  return merged;
 }
 
 main().catch((err) => {

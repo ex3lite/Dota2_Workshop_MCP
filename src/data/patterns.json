@@ -1,5 +1,5 @@
 {
-  "description": "Reusable Dota custom-game design/engineering patterns, learned from shipping games (Spin TD Reborn, GemTD).",
+  "description": "Reusable Dota custom-game design/engineering patterns, learned from shipping games. Tower-defense/maze + backend patterns from Spin TD Reborn & GemTD; Panorama UI/animation, progression, economy and backend patterns distilled from a deep analysis of 18 top games (Dota IMBA, Guarding Athena, Angel Arena Reborn, Pudge Wars, Life In Arena, Horde Mode, Overthrow, and more — see docs panorama/animations-cookbook, panorama/hud-ux-patterns, scripting/custom-game-architecture).",
   "patterns": [
     {
       "name": "Creep pathing via trigger waypoints",
@@ -69,6 +69,543 @@
       "technique": "Both games ship a projectiles/physics lib (homing, AoE, custom motion) layered over the engine. For simple cases prefer the built-in ProjectileManager.CreateLinearProjectile / CreateTrackingProjectile.",
       "api": "ProjectileManager (built-in) or a custom physics lib",
       "source": "Spin TD + GemTD libs/projectiles.lua"
+    },
+    {
+      "name": "State-class CSS animation (JS owns state, CSS owns motion)",
+      "category": "panorama-animation",
+      "summary": "The #1 Panorama UI idiom across shipping games: JS only flips a class; the keyframe/transition defined in CSS does the animation.",
+      "technique": "Define the animated state in CSS (e.g. `#Win.setvisible{ transform: translate3d(0,0,0); }` with a transition on the base rule). From JS just `panel.SetHasClass('setvisible', show)` / `panel.AddClass(...)`. Use `visibility: collapse` in the hidden state to also drop it from layout + hit-testing. Keeps JS tiny and motion declarative/reversible.",
+      "api": "Panel.SetHasClass / AddClass / RemoveClass, CSS transition/@keyframes, visibility: collapse",
+      "source": "Dota IMBA, Guarding Athena, Pudge Wars (battlepass.css, notification, store)"
+    },
+    {
+      "name": "Pop-in toast with scale overshoot",
+      "category": "panorama-animation",
+      "summary": "Punchy kill-feed / loot / notification entrance that overshoots then settles.",
+      "technique": "@keyframes scaling pre-transform-scale2d 0.2 -> 1.5 -> 1.0 over ~0.4s (or scaleX/Y 2 -> 1 for a 'slam'). pre-transform-scale2d animates without affecting layout. Stack toasts upward by flipping the container with `transform: scaleY(-1)` (and each child back).",
+      "api": "@keyframes, pre-transform-scale2d, transform: scaleY(-1)",
+      "source": "Guarding Athena notification/styles.css; Pudge Wars barebones_notifications.css"
+    },
+    {
+      "name": "Rarity 'breathe' glow via animated inset box-shadow",
+      "category": "panorama-animation",
+      "summary": "Cheap, GPU-friendly pulsing border to mark item/reward rarity tiers.",
+      "technique": "One infinite keyframe per tier animating an inset box-shadow radius, e.g. `@keyframes breathe_immortal {0%{box-shadow: inset #e6b800 0 0 1px 0;}50%{box-shadow: inset #e6b800 0 0 4px 0;}100%{...1px...}}`; JS just adds `.immortal_border`. Same idiom drives 'can level up' attractor pulses.",
+      "api": "@keyframes, box-shadow (inset/fill), animation-iteration-count: infinite",
+      "source": "Dota IMBA + Pudge Wars (imba_imr.css / battlepass.css)"
+    },
+    {
+      "name": "Shine-sweep glint over an icon",
+      "category": "panorama-animation",
+      "summary": "A diagonal light stripe that sweeps across an icon for 'new'/'ready' feedback.",
+      "technique": "Overlay a gradient-stripe panel (`background-color: gradient(linear, 100% 0%, 0% 100%, from(#00000000), color-stop(0.45,#fff), color-stop(0.55,#fff), to(#00000000))`) and animate it with a keyframe translating translateX/translateY across the icon when a `.do_shine` class is added.",
+      "api": "gradient(linear, ...), @keyframes translateX/translateY",
+      "source": "Guarding Athena hud_main/styles.css (#Shine.do_shine)"
+    },
+    {
+      "name": "3D fly-in modal (perspective + translate + scale)",
+      "category": "panorama-animation",
+      "summary": "Clean modal-open effect that zooms/rotates a panel into place from off-axis.",
+      "technique": "On the base rule set `perspective: 1000; perspective-origin: ...; transform: translateX(-120px) translateY(-60px); pre-transform-scale2d: 0.95; opacity: 0;` with a transition; the `.Show` state resets transform/scale/opacity to neutral. For drawers, use `transform: translate3d(100%,0,0)` <-> `translate3d(0,0,0)`.",
+      "api": "perspective, perspective-origin, transform translate3d, pre-transform-scale2d, transition",
+      "source": "Guarding Athena store/styles.css; Dota IMBA/Pudge Wars BattlepassWindow"
+    },
+    {
+      "name": "Parameterized keyframes via @define constants",
+      "category": "panorama-animation",
+      "summary": "Declare timing/iteration once and reference the symbol everywhere so a whole set of animations shares one tunable clock.",
+      "technique": "`@define TotalLength: 3s; @define TimingFunc: ease;` then `animation-duration: TotalLength; animation-timing-function: TimingFunc;`. Also used for color theming (`@define slot0color: #0038AC;`).",
+      "api": "@define, animation-* properties",
+      "source": "Pudge Wars pudgewars_tutorial.css; Guarding Athena dashboard css"
+    },
+    {
+      "name": "Radial cooldown sweep via style.clip radial()",
+      "category": "panorama-ui",
+      "summary": "Render a custom circular cooldown/charge sweep without particles.",
+      "technique": "Set `panel.style.clip = 'radial(50% 50%, 0deg, ' + degrees + 'deg)'` from JS, polling the ability/buff remaining time at ~10Hz. Overlays cleanly on a circular icon.",
+      "api": "Panel.style.clip = radial(cx cy, startDeg, endDeg)",
+      "source": "Dota IMBA abilities_charges.js"
+    },
+    {
+      "name": "Prime-and-subscribe net-table key helper",
+      "category": "panorama-ui",
+      "summary": "Keep a panel in sync with ONE net-table row: invoke the callback with the current value, then subscribe for changes to that key.",
+      "technique": "function SubscribeToNetTableKey(t,key,cb){ var v=CustomNetTables.GetTableValue(t,key); if(v!=null) cb(v); CustomNetTables.SubscribeNetTableListener(t,function(_t,k,val){ if(k===key&&val!=null) cb(val); }); } — avoids the classic 'UI misses the first value' bug.",
+      "api": "CustomNetTables.GetTableValue, SubscribeNetTableListener",
+      "source": "Dota IMBA; Guarding Athena (reactive effect variant)"
+    },
+    {
+      "name": "RPC over custom game events (correlation id)",
+      "category": "panorama-ui",
+      "summary": "Turn Dota's one-way custom events into request/response calls with per-call callbacks.",
+      "technique": "Stamp an incrementing id on each SendCustomGameEventToServer payload, Subscribe, and Unsubscribe the moment a reply with the matching id arrives. Server replies via Send_ServerToPlayer with the same id. On the server, a coroutine.wrap+xpcall router can yield on CreateHTTPRequest before replying (crash-isolated RPC + backend bridge).",
+      "api": "GameEvents.SendCustomGameEventToServer/Subscribe/Unsubscribe, CustomGameEventManager:Send_ServerToPlayer",
+      "source": "Dota IMBA createEventRequestCreator; Guarding Athena libraries/request.lua"
+    },
+    {
+      "name": "Augment Valve's HUD instead of rebuilding it",
+      "category": "panorama-ui",
+      "summary": "Reach into the built-in Dota HUD and inject custom panels to inherit Valve's styling/tooltips/art for free.",
+      "technique": "var Shop = GameUI.Utils.FindDotaHudElement('shop'); var ItemBuild = Shop.FindChildTraverse('ItemBuild'); then $.CreatePanel('DOTAShopItem'/'DOTAAbilityImage', ...) into it and wire DOTAShowAbilityTooltip. Far less work/risk than reimplementing the shop or ability bar.",
+      "api": "GameUI.Utils.FindDotaHudElement, Panel.FindChildTraverse, $.CreatePanel, DOTAShowAbilityTooltip",
+      "source": "Dota IMBA (custom item builds injected into the native shop)"
+    },
+    {
+      "name": "Bake server KeyValues to client JS modules",
+      "category": "panorama-ui",
+      "summary": "Ship heroes/items/abilities/upgrades/shops KV to the UI as generated JS lookup tables so panels read tooltips/costs/icons locally with no round-trips.",
+      "technique": "Pre-generate panorama/scripts/custom_game/kv/*.js (itemskv.js, abilityupgradeskv.js, shopskv.js, taskskv.js) as large object literals; include them and read directly. Regenerate as part of the build.",
+      "source": "Guarding Athena kv/*.js"
+    },
+    {
+      "name": "Deferred layout measurement for popups",
+      "category": "panorama-ui",
+      "summary": "Position a popup/dropdown relative to its trigger AFTER layout is computed.",
+      "technique": "Make the popup visible, then `$.Schedule(0.06, () => { let w = Math.max(menu.actuallayoutwidth, btn.actuallayoutwidth)/menu.actualuiscale_x; let pos = btn.GetPositionWithinWindow(); menu.style.x = ...; })`. The one-frame defer is required because measurements are 0 until laid out.",
+      "api": "$.Schedule, Panel.actuallayoutwidth, actualuiscale_x, GetPositionWithinWindow",
+      "source": "Guarding Athena eomdesign.js (dropdown library)"
+    },
+    {
+      "name": "Reactive Panorama via a React/Solid reconciler",
+      "category": "architecture",
+      "summary": "Build complex HUDs as declarative components that auto-rerender on net-table changes, instead of imperative $.CreatePanel spaghetti.",
+      "technique": "Bundle react-panorama (a React reconciler whose hostConfig maps JSX props to Panorama panels via $.CreatePanel/SetParent/MoveChildBefore) or SolidJS; put CustomNetTables listeners inside effects with onCleanup teardown. Heaviest setup, biggest payoff for large UIs.",
+      "api": "react-panorama / SolidJS createSignal/createEffect/onCleanup, custom hostConfig",
+      "source": "Guarding Athena (webpack UI bundle)"
+    },
+    {
+      "name": "Net-table-delivered server key as HTTP auth token",
+      "category": "backend",
+      "summary": "Let the (sandboxed, secret-less) Panorama client authenticate to a real REST backend.",
+      "technique": "The Lua server generates a per-server secret and pushes it via CustomNetTables('game_options','server_key'); the client reads it and sends it as an `X-Dota-Server-Key` header on $.AsyncWebRequest calls to your API (leaderboards, battlepass, armory, save persistence). Decouples persistence from the limited Lua HTTP layer.",
+      "api": "CustomNetTables, $.AsyncWebRequest (client) / CreateHTTPRequestScriptVM (server)",
+      "source": "Dota IMBA (api.frostrose-studio.com)"
+    },
+    {
+      "name": "Frame-count-keyed debounce for net-table writes",
+      "category": "architecture",
+      "summary": "Collapse many same-frame mutations of shared state into a single net-table push.",
+      "technique": "In every setter call UpdateNetTables(); it stamps a per-entity flag like 'Update'..id..'_'..GetFrameCount() and, if unset, schedules a 0-delay Timer that clears it and pushes once. Multiple writes in one frame (gold+crystal+score from one kill) become one CustomNetTables:SetTableValue — no explicit dirty-flag plumbing.",
+      "api": "GameRules:GetGameFrameCount, Timers, CustomNetTables:SetTableValue",
+      "source": "Guarding Athena player_data.lua"
+    },
+    {
+      "name": "Column-oriented 'zip' compression for big net tables",
+      "category": "architecture",
+      "summary": "Fit a large, growing list (e.g. a roguelike upgrade set) under the net-table size budget.",
+      "technique": "Instead of N objects with repeated keys, emit one header row of field names + value-only rows (a matrix), json-encode, and replace the literal 'null' with '*' (the largest repeated token). Clients zip header to values to reconstruct.",
+      "source": "Guarding Athena ability_upgrades.lua (:zip)"
+    },
+    {
+      "name": "Roguelike draw-3-pick-1 upgrade picker",
+      "category": "progression",
+      "summary": "Offer a small random choice of upgrades at milestones (the auto-battler/roguelike reward loop).",
+      "technique": "On a level/round milestone the server draws a rarity from a weighted pool, builds K candidate cards filtered by prerequisites/max-count/unit, publishes them to a CustomNetTables selection keyed by entindex; the UI shows them and sends the chosen id back. Stash unselected draws for later.",
+      "api": "weighted random, CustomNetTables, CustomGameEventManager",
+      "source": "Guarding Athena ability_upgrades.lua (DrawAbilityUpgrades)"
+    },
+    {
+      "name": "Majority-vote selection (difficulty / next mode)",
+      "category": "architecture",
+      "summary": "Let players vote during a lobby/end screen and resolve at a game-state change.",
+      "technique": "Each client writes its choice into a net table (with a countdown); at PRE_GAME (or end) the server tallies votes and picks the majority (define a deterministic tie-break, e.g. lower difficulty). Auto-pick for players who didn't choose.",
+      "api": "CustomNetTables, GameRules state-change listener (OnGameRulesStateChange)",
+      "source": "Guarding Athena (difficulty); Dota IMBA (end-game mode vote)"
+    },
+    {
+      "name": "Class-based singleton modules with hot-reload guard",
+      "category": "architecture",
+      "summary": "Structure server code as modules that survive script_reload cleanly.",
+      "technique": "Each system is `X = X or class({})` with an `init(bReload)` that only seeds state when not a reload, then (re)binds events through wrappers (GameEvent/CustomUIEvent/Timer). A central init.lua clears package.loaded on reload so modules re-run. Keeps live-reload safe for complex addons.",
+      "api": "class({}), package.loaded, ListenToGameEvent / CustomGameEventManager",
+      "source": "Guarding Athena init.lua + mechanics/*.lua"
+    },
+    {
+      "name": "Custom combat-event toast feed",
+      "category": "panorama-ui",
+      "summary": "Replace Valve's kill/gold/roshan toasts with a styled, animated feed.",
+      "technique": "Server sends 'combat'/'upper'/'chat_line' events with a token-substitution message format ({s:player_name}, {d:int_*}, item-icon detection); the client renders angled (opacity-mask PNG), team-colored, gradient panels that fly in and collapse out via class toggles, stacked upward.",
+      "api": "CustomGameEventManager:Send_ServerToAllClients, GameEvents.Subscribe, $.CreatePanel",
+      "source": "Dota IMBA combat_events.css; Guarding Athena notification.lua"
+    },
+    {
+      "name": "Particle lifecycle: create → set CPs → ReleaseParticleIndex",
+      "category": "effects",
+      "summary": "The pervasive one-shot FX idiom that avoids leaks without Lua bookkeeping.",
+      "technique": "For fire-and-forget effects: local id = ParticleManager:CreateParticle(path, attach, parent); set control points; then ParticleManager:ReleaseParticleIndex(id) IMMEDIATELY. The particle plays to completion and the engine reclaims the index automatically. For persistent/looping FX you must keep the id and ParticleManager:DestroyParticle(id, false) yourself (or use modifier AddParticle).",
+      "api": "ParticleManager:CreateParticle / SetParticleControl(Ent) / ReleaseParticleIndex / DestroyParticle, PATTACH_*",
+      "source": "Guarding Athena modifier_common.lua (lifesteal/cleave/crit FX)"
+    },
+    {
+      "name": "Floating damage numbers via a message particle",
+      "category": "effects",
+      "summary": "Damage/combat-text is a particle (msg_*.vpcf), not a UI element — encode the number into control points.",
+      "technique": "CreateParticle('particles/msg_fx/msg_crit.vpcf' or msg_damage/msg_gold, PATTACH_CUSTOMORIGIN); SetParticleControlEnt(id, 0, target, PATTACH_OVERHEAD_FOLLOW, ...); CP1 = (0, value, digitStyle); CP2 = (duration, #digits+1, 0); CP3 = color; then ReleaseParticleIndex. Reuses Valve's overhead message FX.",
+      "api": "ParticleManager (msg_fx vpcf), SetParticleControl CP1/CP2/CP3 encoding",
+      "source": "Guarding Athena modifier_common.lua"
+    },
+    {
+      "name": "Modifier-owned FX with AddParticle (auto-cleanup)",
+      "category": "effects",
+      "summary": "Looping/aura FX that the engine destroys when the modifier ends — created client-side to skip replication.",
+      "technique": "Inside a modifier, guard with if IsClient() then create the particle (saves a server→client replication), attach with SetParticleControlEnt + PATTACH_POINT_FOLLOW to model attach points (attach_weapon, attach_hitloc), then self:AddParticle(id, ...) so it's torn down automatically on modifier removal.",
+      "api": "CDOTA_Modifier_Lua:AddParticle, IsClient(), SetParticleControlEnt(PATTACH_POINT_FOLLOW, attachName)",
+      "source": "Guarding Athena modifier_courier_fx_*"
+    },
+    {
+      "name": "Custom projectile with a self-driven particle",
+      "category": "combat",
+      "summary": "When ProjectileManager isn't enough, drive your own particle as the projectile.",
+      "technique": "CreateParticle(fx, PATTACH_CUSTOMORIGIN, nil); each frame SetParticleControl(id, 0, pos) and CP1 = velocity, plus SetParticleControlForward(id, 0, dir) so the FX faces travel. Tracking variants bind CP1 to the target via SetParticleControlEnt(...PATTACH_POINT_FOLLOW,'attach_hitloc'). Store the id to DestroyParticle on hit/expire. For most cases prefer the built-in ProjectileManager:CreateLinearProjectile / CreateTrackingProjectile.",
+      "api": "ParticleManager + SetParticleControlForward; or ProjectileManager (built-in)",
+      "source": "Guarding Athena projectile_system.lua"
+    },
+    {
+      "name": "Game feel: screen shake, camera, hit feedback",
+      "category": "effects",
+      "summary": "Small touches that make hits land: shake, camera nudges, and audio shaping.",
+      "technique": "ScreenShake(center, amplitude, frequency, duration, radius, command, bAir) for impacts; PlayerResource:SetCameraTarget(pid, unit) (then nil to release) for cinematics/cutscenes; pair channel sounds with an explicit StopSound on release; EmitSoundOnLocationWithCaster for positional impacts; EmitGlobalSound for non-positional 'wave incoming' beats.",
+      "api": "ScreenShake, PlayerResource:SetCameraTarget, EmitSoundOnLocationWithCaster, StopSound, EmitGlobalSound",
+      "source": "corpus (Guarding Athena, IMBA, Pudge Wars)"
+    },
+    {
+      "name": "Unit AI think loop with radius targeting",
+      "category": "ai",
+      "summary": "Per-unit AI for towers/creeps/bosses without the heavy built-in AI.",
+      "technique": "Attach a thinker (AddNewModifier with OnIntervalThink, or unit:SetContextThink) running every ~0.1-0.5s; inside, FindUnitsInRadius(team, origin, nil, range, TARGET_TEAM_ENEMY, TARGET_HERO|BASIC, flags, FIND_CLOSEST, false) to pick a target, then CastAbilityOnTarget / MoveToPosition. Multi-phase bosses switch ability sets at HP thresholds. Guard authoritative logic with IsServer() and always validate handles (not :IsNull()).",
+      "api": "SetContextThink / AddNewModifier(OnIntervalThink), FindUnitsInRadius, ExecuteOrderFromTable",
+      "source": "corpus (Horde Mode, Life In Arena, Warchasers AI)"
+    },
+    {
+      "name": "EHP rescale — bypass Dota's 32-bit health cap",
+      "category": "combat",
+      "summary": "Make a boss behave/display as having billions of HP while the engine only tracks 0..200000.",
+      "technique": "Clamp real MaxHealth to e.g. 200000; compute EHP_MULT = goalHP/200000; attach a modifier returning MODIFIER_PROPERTY_INCOMING_DAMAGE_PERCENTAGE = -(1 - 1/EHP_MULT)*100 so each real HP soaks EHP_MULT damage; divide base health regen by EHP_MULT; a think loop multiplies real GetHealth()/GetMaxHealth() by EHP_MULT and ships the 'effective' (comma-formatted) values to a custom Panorama HP bar. Beats the int cap instead of fighting it.",
+      "api": "SetMaxHealth, MODIFIER_PROPERTY_INCOMING_DAMAGE_PERCENTAGE, SetBaseHealthRegen, CustomNetTables",
+      "source": "Epic Boss Fight (305278898) bosshealthrescale.lua"
+    },
+    {
+      "name": "Rubber-banding catch-up (Mario-Kart 'blue shell')",
+      "category": "architecture",
+      "summary": "Keep races/chases close by making whoever is behind faster.",
+      "technique": "Each second, rank players by remaining course distance, then assign an ASCENDING SetBaseMoveSpeed (1st = base, each next rank +N) so the last place is fastest. Capture the leader's id in the same pass to aim targeted hazards at the front-runner. Fully server-side.",
+      "api": "SetBaseMoveSpeed, table.sort",
+      "source": "Dota Run (469890148) addon_game_mode.lua (BlueShell)"
+    },
+    {
+      "name": "Track-progress scalar over a waypoint course",
+      "category": "architecture",
+      "summary": "A single comparable 'how far along' number for racing/escort/lap ordering.",
+      "technique": "Precompute pairwise distances between ordered checkpoints once. Each tick, per player walk checkpoints from last→first: add the full precomputed segment for each not-yet-crossed checkpoint, then add the live vector distance to the next uncrossed checkpoint and break. Sort the resulting remaining-distance scalars into positions.",
+      "api": "GetAbsOrigin, (vec):Length2D(), table.sort",
+      "source": "Dota Run (469890148)"
+    },
+    {
+      "name": "Procedurally generated, guaranteed-solvable layout",
+      "category": "mapping",
+      "summary": "Randomize a hazard grid (minefield/maze) while guaranteeing a path exists by construction.",
+      "technique": "Fill a grid as blocked; carve a guaranteed corridor with a biased random walk from one edge (each step: advance a column ~60%, else jiggle the row in-bounds), marking visited cells safe until it exits; plant hazards only on the still-blocked cells (optionally with staggered spawn timing). Solvable every round without running a solver.",
+      "source": "Dota Run (469890148) techies.lua"
+    },
+    {
+      "name": "Reuse Dota's native red error popup",
+      "category": "panorama-ui",
+      "summary": "Show custom localized messages in Valve's familiar top-center error toast — no custom panel.",
+      "technique": "$.DispatchEvent('DOTAHUDShowError', ...) / fire the dota_hud_error_message with a reason code (e.g. reason 80) and your localized string, so custom validation errors look native.",
+      "api": "DOTAHUDShowError / dota_hud_error_message (reason codes)",
+      "source": "OVERTHROW 3.0 (2760533777)"
+    },
+    {
+      "name": "Read the player's REAL keybind / ping",
+      "category": "panorama-ui",
+      "summary": "Get the user's actual configured hotkey and live ping into your UI/vscript.",
+      "technique": "Keybind: create a throwaway <DOTAHotkey> panel bound to a command and read back the resolved key text to label custom controls with the player's own binding. Ping: read the text of the engine's built-in NetGraph HUD label (traverse to it) to surface real ping in vscript/UI.",
+      "api": "<DOTAHotkey> panel, root-panel traversal of the NetGraph label",
+      "source": "Petri Reborn / Angel Arena Black Star / training polygon"
+    },
+    {
+      "name": "World→minimap overlay (custom map markers)",
+      "category": "mapping",
+      "summary": "Draw custom markers/zones on Dota's native minimap.",
+      "technique": "Server projects world positions to minimap percentages (per team) and pushes them via a net table; the client places point panels sized to the native minimap element (found via HUD traversal), e.g. a battle-royale shrinking-zone circle or objective pings. Also: discover the playable bounds at runtime with TraceHull from the 4/6 sides toward center.",
+      "api": "CustomNetTables, FindDotaHudElement(minimap), TraceHull (bounds)",
+      "source": "Battle of Mirkwood / Angel Arena Black Star / WTF+"
+    },
+    {
+      "name": "Reliable client→server events (ACK + retry)",
+      "category": "backend",
+      "summary": "Make Dota's lossy custom events reliable + anti-spoofed.",
+      "technique": "Tag each client→server event with a sequence id + a per-client token; the server ACKs by id; the client retries unacked events with adaptive RTT backoff. The token (e.g. a per-client murmurhash the server learns passively, or one derived from GetDedicatedServerKeyV3) authenticates the sender and routes the reply. Pair with HMAC-SHA1 (canonical sorted-param string) for HTTP backend calls.",
+      "api": "GameEvents.SendCustomGameEventToServer, CustomGameEventManager, GetDedicatedServerKeyV3, HMAC-SHA1",
+      "source": "OVERTHROW 3.0 / WTF+ / Battle of Mirkwood"
+    },
+    {
+      "name": "Custom physics: broadphase + CCD",
+      "category": "combat",
+      "summary": "Real collision for projectiles/units beyond ProjectileManager.",
+      "technique": "Maintain a custom physics world: sweep-and-prune broadphase (sort AABBs on an axis, only test overlapping spans) with continuous collision detection via a binary heap of next-collision times; re-integrate Dota's pathing velocity into the same world for hybrid movement; fly projectiles along an arc-length-reparameterized analytic curve injected as velocity; bounce off terrain using an offline-baked wall-normal 'angle grid' for O(1) reflection.",
+      "api": "custom physics (SAP/CCD, binary heap), GetGroundHeight, precomputed normal grid",
+      "source": "Warlock Brawl / Battle of Characters"
+    },
+    {
+      "name": "Bot AI frameworks (blackboard / potential fields)",
+      "category": "ai",
+      "summary": "Structured bot AI beyond ad-hoc think loops.",
+      "technique": "Stack-based hierarchical AI with a shared blackboard and a multi-agent supervisor (push/pop behaviors, shared world state); or potential-field gradient-descent dodging (sum repulsion vectors from threats/projectiles, step down the gradient) for reactive evasion.",
+      "source": "WTF+ (blackboard) / Warlock Brawl (potential fields)"
+    },
+    {
+      "name": "Native Panorama drag-drop inventory + context menus",
+      "category": "panorama-ui",
+      "summary": "A full custom inventory with item swapping and right-click menus, using Panorama's drag-drop.",
+      "technique": "Use DragStart/OnDragEnter/OnDragDrop panel events (SetDraggable) to swap item slots; build right-click menus by gutting/reusing the native ContextMenuScript panel; restyle native buff/debuff icons in place. Reuse DOTAItemImage for icons + native tooltips.",
+      "api": "Panel SetDraggable, DragStart/OnDragDrop events, ContextMenuScript",
+      "source": "Battle of Characters / Petri Reborn"
+    },
+    {
+      "name": "GridNav → text export pipeline",
+      "category": "mapping",
+      "summary": "Export the map's walkability + geometry for an offline data pipeline.",
+      "technique": "From vscript, sample GridNav:IsTraversable / IsBlocked over the map to build a blockage bitmap, plus a serialized wall-normal angle grid, and write them via InitLogFile/console output; bake the result into a packed runtime grid (RLE / packed ints) the game loads instead of recomputing.",
+      "api": "GridNav:IsTraversable/IsBlocked, InitLogFile / con_logfile",
+      "source": "Battle of Characters / Battle of Mirkwood"
+    },
+    {
+      "name": "Line-level Lua memory profiler",
+      "category": "backend",
+      "summary": "Find allocation hotspots in vscript during development.",
+      "technique": "Install a debug.sethook(fn, 'l') line hook that samples collectgarbage('count') deltas per source line, accumulating allocation per (file:line); dump the worst offenders. A dev-only tool to hunt GC churn that causes hitches.",
+      "api": "debug.sethook('l'), collectgarbage('count')",
+      "source": "Battle of Mirkwood (483.../1092484716)"
+    },
+    {
+      "name": "Centralized modifier event-bus / fan-out",
+      "category": "architecture",
+      "summary": "One global thinker re-dispatches engine MODIFIER_EVENT_* to the modifiers that care — instead of every modifier declaring its own events.",
+      "technique": "Attach a single thinker modifier to the game-mode entity that DeclareFunctions() ALL the MODIFIER_EVENT_* (OnTakeDamage/OnAttack/OnDeath/...). On modifier-added, reflect over the new modifier against an event→method map and subscribe it to only the events it implements; re-dispatch each engine event to the registered listener list (auto-pruning IsNull()). Lets you add synthetic events the engine doesn't expose (e.g. OnHealDone) and gives modifiers a zero-boilerplate 'self events' API (OnParentTakeDamage/OnParentDealDamage). Cheaper than N modifiers each evaluated globally.",
+      "api": "AddNewModifier thinker, DeclareFunctions, OnModifierAdded reflection",
+      "source": "Ability Arena modifier_event_fan_out.lua; Kill Boss And Win gameplay_event_tracker"
+    },
+    {
+      "name": "MMO-style threat/aggro table for boss targeting",
+      "category": "ai",
+      "summary": "WoW-style tank aggro layered on Dota AI — abilities/items add or drop threat; the boss targets highest-threat with hysteresis + stickiness.",
+      "technique": "Each hero carries a numeric threat; abilities/items declare an AbilityThreat in KV (e.g. an item with -25 = a taunt-drop). The boss targets the highest-threat hero but only switches when a rival exceeds the current by a margin (5 * personality) — hysteresis — and keeps the target until ~1.5s of lost vision — stickiness. Rank heroes (primary/secondary) and push each player their aggro rank for a UI indicator.",
+      "api": "custom GetThreat/ModifyThreat, FindUnitsInRadius, CustomGameEventManager",
+      "source": "Epic Boss Fight Reborn (1844502841) ai_core.lua"
+    },
+    {
+      "name": "Custom ability/item metadata via a KV table (extend the schema, not code)",
+      "category": "architecture",
+      "summary": "Attach arbitrary gameplay metadata to abilities/items in their KV that the engine ignores, read through a single lookup.",
+      "technique": "Pre-parse all ability/item KV into GameRules.AbilityKV[name]; add accessor methods (CDOTABaseAbility:GetThreat() etc.) that read CUSTOM keys (AbilityThreat, PiercesDisableReduction, InnateAbility, …) the engine has no concept of. Designers tune systems purely in data; works for both datadriven + lua abilities.",
+      "api": "LoadKeyValues, GameRules.AbilityKV, custom CDOTABaseAbility methods",
+      "source": "Epic Boss Fight Reborn (1844502841) utility.lua"
+    },
+    {
+      "name": "Declarative target-selection DSL for ability auto-cast",
+      "category": "ai",
+      "summary": "A composable filter-chain rules engine that picks ability targets across hundreds of abilities (auto-battler).",
+      "technique": "Each ability registers ordered ruleSets; a rule is a predicate (target, ctx, remaining)->bool that narrows candidates, composed with and/or/not. Primitives: isClosest/Farthest, isLowest/HighestHealth, hasEnemyInRange, modifier-stack checks, plus arena-relative geometry via signed distance to a line. Auto-derive sane targeting from the ability's KV (team + behavior) when no rules are given; cluster predicted unit positions for ground-target cast points (lead targeting).",
+      "api": "data-driven rule predicates, FindUnitsInRadius, signed-distance geometry",
+      "source": "Ability Arena (2865676075) ai.lua"
+    },
+    {
+      "name": "Queryable state-sync over custom events (net-table alternative)",
+      "category": "architecture",
+      "summary": "Reactive client/server state without CustomNetTables — subscribe to named 'parts', server pushes only changed ones, with spectator indirection.",
+      "technique": "Server defineQueryableState(name, fn, hashKey); a think loop hashes each part and Send_ServerToPlayer('stateUpdate', changed) only on change. Client subscribeToQuery([parts], handler) requests missing parts, caches them, and fires the handler only when ALL parts are present (a reactive multi-key join). Serialize the VIEWED player's state to the actual client so spectating reuses the UI unchanged; bots are headless clients using the same API.",
+      "api": "CustomGameEventManager:Send_ServerToPlayer, GameEvents, per-part hashing",
+      "source": "Ability Arena (2865676075)"
+    },
+    {
+      "name": "Diff-based per-player nested-state replication",
+      "category": "architecture",
+      "summary": "Ship only deltas of a nested state tree per player, with delete/clear sentinels — a scalable net-table alternative.",
+      "technique": "Keep a full snapshot + an incremental diff tree per player keyed by dotted paths; debounce at ~1/30s and send only deltas. Encode deletions as a sentinel object ({_remove=N}) and subtree replacement as a __bClear flag the client honors. Cut event count by GROUPING all players that share an identical value into one space-delimited 'players' string per event. Auto-prime late joiners via a request/response handshake.",
+      "api": "FireGameEvent / CustomGameEventManager, debounced diff tree",
+      "source": "Kill Boss And Win (1436504119) gentable.lua"
+    },
+    {
+      "name": "Income economy: progressive tax + diminishing returns",
+      "category": "progression",
+      "summary": "The auto-spawn AoS economy (Castle Fight): periodic income with a progressive tax curve so leaders don't snowball.",
+      "technique": "Grant periodic income per player; apply a progressive 'tax' (higher income taxed more) and diminishing returns on repeated same-building spend so the gap between leaders and trailers stays bounded — a soft rubber-band done through the economy instead of stats.",
+      "source": "Castle Fight (1757281740)"
+    },
+    {
+      "name": "Population-adaptive AI think-rate throttling (load shedding)",
+      "category": "ai",
+      "summary": "Scale per-unit AI think interval to the live unit count so big battles don't tank the server.",
+      "technique": "Track the number of active AI units; widen each unit's think interval as population grows (and/or process a round-robin slice of units per tick) so total AI work per frame stays bounded. Trade reaction latency for frame time only when crowded.",
+      "api": "SetContextThink with a dynamic return interval, round-robin slicing",
+      "source": "Castle Fight (1757281740)"
+    },
+    {
+      "name": "Warcraft-3 attack-type × armor-type damage matrix",
+      "category": "combat",
+      "summary": "Reproduce WC3's attack-type vs armor-type damage multipliers (piercing/siege/magic vs light/heavy/fortified) on top of Dota.",
+      "technique": "Tag units with an attack-type and an armor-type; in a damage filter (SetDamageFilter) look up a 2D multiplier matrix by (attackType, armorType) and scale the damage before it applies. Lets you port classic AoS/TD damage triangles.",
+      "api": "GameMode:SetDamageFilter, multiplier matrix",
+      "source": "Castle Fight (1757281740)"
+    },
+    {
+      "name": "Roguelite affix ('elite mob') system",
+      "category": "combat",
+      "summary": "Diablo/PoE-style random affixes on wave units, color-coded so players read them at a glance.",
+      "technique": "A pool of ~18 affix modifiers (reflect, lifesteal-on-hit, explode-on-death, DoT-on-hit, regen aura, giant…); each affix's OnCreated SetRenderColor()s the unit a distinct tint. Regular packs roll one affix; bosses run a roll-and-dedup loop (HasModifier check, break at N) for exactly N DISTINCT affixes. A reusable elite-mob framework.",
+      "api": "AddNewModifier, SetRenderColor, HasModifier",
+      "source": "Invasion of zombies (524035937)"
+    },
+    {
+      "name": "Asymptotic diminishing-returns stacking",
+      "category": "combat",
+      "summary": "Combine multiple sources of a 0..1 stat (reduction/evasion) so they stack like Dota's real reductions and never exceed 100%.",
+      "technique": "Apply stacked modifier sources in a fixed operation order (SET → ADD → MULT → PCT → ASYMPTOTE); the asymptote op is value + next − value*next (multiplicative diminishing returns). Recompute per ability level and ship the result to clients for accurate tooltips.",
+      "source": "Kill Boss And Win (1436504119) special_modifier.lua"
+    },
+    {
+      "name": "Party-aware team balancer + MMR comeback",
+      "category": "architecture",
+      "summary": "Auto-balance teams without splitting premades, then rubber-band the weaker team by real MMR.",
+      "technique": "Enumerate every split of N players into two halves (lexicographic combination iterator); score each by a two-key objective: FIRST minimize premade parties split across teams (GetPartyID), THEN minimize skill-sum delta; apply with SetCustomTeamAssignment during setup. Separately, compute a team skill ratio from a backend (game_count/win_rate) and give the weaker team time-scaling free upgrades + a gold multiplier.",
+      "api": "PlayerResource:GetPartyID, SetCustomTeamAssignment, MultiplyGold",
+      "source": "Kill Boss And Win (1436504119) rank.lua"
+    },
+    {
+      "name": "Single-source data pipeline (spreadsheet → KV + JSON)",
+      "category": "tooling",
+      "summary": "Author balance data once and generate both the server KV (Lua) and the client lookup (JSON).",
+      "technique": "Keep the source of truth in a spreadsheet (Excel/CSV); a build step emits the npc/ability KV (or a Lua table) for the server AND a JSON/JS lookup for Panorama, so tooltips/costs/icons never drift from gameplay values. Regenerate as part of the build.",
+      "source": "Bless ARAM (2841152696)"
+    },
+    {
+      "name": "Co-op proximity revive (beacon)",
+      "category": "architecture",
+      "summary": "Dead players drop a beacon any teammate can channel/stand near to revive them — a co-op staple.",
+      "technique": "On death, spawn a beacon entity (a marker/'X') at the corpse and a per-frame check: if a living teammate is within radius for the required time, revive the dead player at the beacon and remove it. Show the beacon + a progress hint on the HUD/minimap.",
+      "api": "CreateUnitByName (beacon), FindUnitsInRadius, RespawnHero/SpawnEntityFromTableSynchronous",
+      "source": "Escape the Undying Dead (630768961)"
+    },
+    {
+      "name": "Runtime ability-graft onto engine-owned entities (self-healing)",
+      "category": "architecture",
+      "summary": "Attach custom behavior to entities you can't define in KV (fountains, shops) and re-apply it across engine resets.",
+      "technique": "You can't edit ent_dota_fountain etc. in script — instead a GlobalThink (~1s) re-scans Entities:FindAllByClassname and, for any missing your ability, AddAbility()+SetLevel() to (re)graft it. The recurring check makes it self-healing across fountain/shop rebuilds at game-state transitions (a one-time setup silently fails). The grafted ability can be an aura/passive (e.g. an anti-fountain-camp silence aura).",
+      "api": "Entities:FindAllByClassname, NPC:AddAbility/GetAbilityByIndex/SetLevel, SetContextThink",
+      "source": "Dota 2 Duel 1v1 (890449266)"
+    },
+    {
+      "name": "Reuse a built-in hero modifier as a stasis/hide primitive",
+      "category": "combat",
+      "summary": "Repurpose an existing engine ability's modifier as a general 'remove unit from the world' building block.",
+      "technique": "AddNewModifier(..., 'modifier_phoenix_supernova_hiding') hides + untargets a unit (e.g. stash an AFK/disconnected hero so the opponent can't farm it). Re-apply it with {duration = 0.00} to instantly clear a no-duration modifier and bring the unit back. Generalize: many built-in modifiers are reusable primitives (stun, invuln, phase) — link/apply them instead of writing your own.",
+      "api": "AddNewModifier (built-in modifier names), duration=0 to clear",
+      "source": "Dota 2 Duel 1v1 (890449266)"
+    },
+    {
+      "name": "Arena/duel round reset (cooldowns) on kill credit",
+      "category": "architecture",
+      "summary": "Refresh everyone's full arsenal each round for round-based arenas.",
+      "technique": "Listen to dota_team_kill_credit (fires once per SCORED kill, unlike entity_killed); on it, walk all heroes and EndCooldown() each non-passive ability (slots 0-15) AND each item (slots 0-5) so duelists re-engage with everything ready. Also the canonical hook for round bookkeeping/score.",
+      "api": "ListenToGameEvent('dota_team_kill_credit'), Ability:EndCooldown, GetItemInSlot",
+      "source": "Dota 2 Duel 1v1 (890449266)"
+    },
+    {
+      "name": "Off-mesh terrain traversal (controlled cliff-climbing)",
+      "category": "combat",
+      "summary": "Let a ground unit cross blocked terrain in a punishing, exploit-resistant way.",
+      "technique": "A per-tick modifier toggles MODIFIER_STATE_FLYING_FOR_PATHING_PURPOSES_ONLY so the unit can step onto GridNav:IsBlocked cells; record the last good position and SetAbsOrigin back if a tick ends on blocked ground (rubber-band). While on blocked ground, apply overlapping decaying movespeed penalties (e.g. -200/1.1s, -50/3s, -25/5s) so it crawls across and pays a fading tax — instead of a hard wall or instant teleport.",
+      "api": "MODIFIER_STATE_FLYING_FOR_PATHING_PURPOSES_ONLY, GridNav:IsBlocked, SetAbsOrigin",
+      "source": "Tree Tag (304291612)"
+    },
+    {
+      "name": "Destructible trees as asymmetric level geometry",
+      "category": "mapping",
+      "summary": "Use the map's living trees as dynamic, self-healing terrain — central to tag/maze/stealth modes.",
+      "technique": "Query trees per-frame with GridNav:GetAllTreesAroundPoint + tree:IsStanding. Give teams opposite relationships: the hider gets speed + NOT_ON_MINIMAP while in trees (forest = cover); the hunter must tree:CutDownRegrowAfter(t, team) to chop a path and is self-slowed while doing so. SetTreeRegrowTime makes the maze regrow/heal, so foliage IS the geometry, not decoration.",
+      "api": "GridNav:GetAllTreesAroundPoint, CDOTA_MapTree:IsStanding/CutDownRegrowAfter, SetTreeRegrowTime",
+      "source": "Tree Tag (304291612)"
+    },
+    {
+      "name": "Client-side grid placement UI (tower/building)",
+      "category": "panorama-ui",
+      "summary": "Warcraft-3-style build placement with per-cell validity + a model ghost, computed entirely on the client.",
+      "technique": "Each tick: snap the cursor to the grid, and for the 4 corner cells WorldToScreenX/Y → GameUI.FindScreenEntities(pixel) to see what occupies each, tinting that corner's ghost particle red/green (partial-cell feedback, no server round-trip). Preview an arbitrary unit MODEL with a server-cached EF_NODRAW dummy (modifier_out_of_world) whose entIndex the client binds a ghost_model.vpcf to via SetParticleControlEnt(PATTACH_ABSORIGIN_FOLLOW); add a radius_indicator.vpcf sized to attack range.",
+      "api": "Game.WorldToScreenX/Y, GameUI.FindScreenEntities, Particles (ghost model + range), EF_NODRAW dummy",
+      "source": "Survival TD (484192952)"
+    },
+    {
+      "name": "Native engine systems as free RTS UI",
+      "category": "architecture",
+      "summary": "Overload Dota's stat/mana systems to render RTS resources + build bars with zero Panorama.",
+      "technique": "Store extra economies in the hero's three attributes (Intellect=Energy, Strength=Tech, Agility=Income) so the stock attribute HUD shows them for free (keep an authoritative _G table in sync, mirror via SetBase*). Drive a unit's mana 0..100 as a circular progress/cooldown bar: spawn cadence = SetMana(tick/rate*100); a 'channel' fills exactly over a duration via SetMana(0)+SetBaseManaRegen(GetMaxMana()/time).",
+      "api": "SetBaseIntellect/Strength/Agility, SetMana, SetBaseManaRegen",
+      "source": "Ancient Wars / Castle Fight port (305030070)"
+    },
+    {
+      "name": "Production queue in a building's item-inventory slots",
+      "category": "architecture",
+      "summary": "Implement an RTS train/research queue using the unit's native 6-slot item bar (free drag/cancel UI).",
+      "technique": "Each queued order is an item named item_<train_ability>: enqueue = CreateItem+AddItem (cap 6); dequeue removes + refunds; advance by scanning slots 0-5, stripping the 'item_' prefix to find the paired ability and channeling it (EndChannel → spawn). ReorderItems/SwapItems compacts the slots so the inventory bar IS the visible ordered queue.",
+      "api": "CreateItem/AddItem/GetItemInSlot, Ability:SetChanneling, item KV",
+      "source": "Ancient Wars (305030070) queue.lua"
+    },
+    {
+      "name": "Client-side selection rewriting (RTS control groups)",
+      "category": "panorama-ui",
+      "summary": "Make box-select prioritize army over buildings (and other custom selection rules) in Panorama.",
+      "technique": "Subscribe to dota_player_update_selected_unit; when a drag-select mixes buildings + units, rebuild the selection with GameUI.SelectUnit to keep only non-buildings. Guard recursion: each programmatic SelectUnit re-fires the event, so set a module-level skip flag before every call and re-emit the corrected selection on a $.Schedule debounce.",
+      "api": "GameEvents.Subscribe('dota_player_update_selected_unit'), GameUI.SelectUnit, $.Schedule",
+      "source": "Ancient Wars (305030070) unit_selection.js"
+    },
+    {
+      "name": "In-place tier upgrade by unit replacement",
+      "category": "architecture",
+      "summary": "Tower/building tiers via destroy-and-recreate, with the next unit's name derived by string math.",
+      "technique": "Upgrade = create the next-tier unit (name from a '_level_N' convention: append '_level_2', else increment the trailing digit), carry over platform/owner refs, re-level abilities by index, park the old unit (z=-512) and destroy it next tick. Gate tiers on the builder hero's level/XP (AddExperience + ability SetLevel); the same Lua class is aliased across all per-unit upgrade ability defs. Build progress itself = spawn at 1 HP and lerp SetHealth→max over BuildTime (reuses the health bar as a build timer).",
+      "api": "CreateUnitByName, string name math, SetHealth lerp, AddExperience",
+      "source": "Survival TD (484192952) upgrade_tower.lua / build_tower.lua"
+    },
+    {
+      "name": "Bitboard flood-fill maze validator",
+      "category": "tower-defense",
+      "summary": "Answer 'does this tower wall off the lane?' orders of magnitude cheaper than A*, using packed-grid bitwise BFS.",
+      "technique": "Encode the buildable grid as a bitboard (each row = integer 'segments', SEGMENT_SIZE≈29 usable bits + reserved overflow bits, one bit per column). Flood from every exit: per row, expand a column each side with pathSeg = bor(pathSeg, lshift(pathSeg,1), rshift(pathSeg,1)) then clip to pathable with band(pathSeg, testSeg); propagate up/down rows to a fixpoint; reserved boundary bits drive cross-segment overflow. Then verify every gateway/unit still touches the mask. A cheap QuickCheck first walks the footprint perimeter and allows placement only if blocked cells form a single contiguous arc.",
+      "api": "LuaJIT bit ops (bor/band/lshift/rshift/bdiff), packed row segments",
+      "source": "Tropical Tower Wars (532158797) regions/region.lua"
+    },
+    {
+      "name": "Commit-then-validate anti-maze (engine pathfinding)",
+      "category": "tower-defense",
+      "summary": "Simplest maze-prevention: let the engine place the blocker, then check real pathing and roll back if a lane is cut.",
+      "technique": "After BuildingHelper places the point_simple_obstruction for a finished building, call GridNav:CanFindPath(spawner, waypoint) for every lane; if ANY fails (player walled a lane), RemoveBuilding + refund the gold + SendErrorMessage. 'Commit, validate actual engine pathfinding, undo on failure' — no parallel grid model to maintain (vs the proactive bitboard/A* validators).",
+      "api": "GridNav:CanFindPath, point_simple_obstruction, BuildingHelper:RemoveBuilding, ModifyGold",
+      "source": "Faction Tower Wars (486811968) buildinghelper.lua"
+    },
+    {
+      "name": "Reactive build-tree dependency graph (dirty propagation)",
+      "category": "architecture",
+      "summary": "Recompute only the tech/build nodes whose inputs changed, instead of re-evaluating the whole tree each tick.",
+      "technique": "Author prerequisites as a recursive DSL in KV (and/or/nand/nor blocks, per-level gates, '@' self-ref, named refs, leaf aspect/variable comparisons). Statically crawl each node's require tree to extract the set of leaf 'triggers' it depends on, and register a refcounted reverse index requireTriggers[trigger] = {dependents}. On a state-change event, look up only the nodes depending on that trigger and recompute just those — a spreadsheet-recalc / dirty-propagation model for tech trees.",
+      "api": "recursive requirement DSL, reverse trigger index, event-driven recompute",
+      "source": "Tropical Tower Wars (532158797) containers/checks/require.lua"
+    },
+    {
+      "name": "Spatial decay penalty field (sell-refund diffusion)",
+      "category": "progression",
+      "summary": "Discourage resell/abuse near a hot spot with a penalty that floods outward and decays with distance.",
+      "technique": "On sell, bump 'stacks' on the footprint tiles (batch same-tick sells via one timer). Push over-threshold tiles into a PriorityQueue keyed by stacks; pop highest-first and propagate a decremented value into the 4-adjacent free tiles, re-pushing them so the penalty floods outward. Tiles use a lazy 'bump' snapshot (recompute from one timestamp instead of ticking). A reusable spatial-decay field built on batched priority diffusion.",
+      "api": "PriorityQueue, 4-neighbour flood, lazy timestamp recompute",
+      "source": "Tropical Tower Wars (532158797) regions/region.lua"
+    },
+    {
+      "name": "WC3 corpse-as-entity system",
+      "category": "combat",
+      "summary": "Make corpses queryable map entities so all raise/consume abilities share one corpse pool (Warcraft-3 style).",
+      "technique": "On any non-hero/non-building death, spawn a persistent INVISIBLE npc_dota_creature at the death spot set to the corpse model, and stamp Lua fields on the handle: unit_name = the dead unit's name, corpse_expiration = time+N (self-removes after). Raise Dead / Animate Dead / Resurrection / Spirit of Vengeance all Entities:FindAllByNameWithin('npc_dota_creature', origin, radius) and reconstruct by the stamped unit_name.",
+      "api": "CreateUnitByName (invisible dummy), Entities:FindAllByNameWithin, handle fields",
+      "source": "Footmen Frenzy (298904487)"
     }
   ]
 }
