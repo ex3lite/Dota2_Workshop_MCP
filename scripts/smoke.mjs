@@ -46,7 +46,8 @@ async function main() {
   const transport = new StdioClientTransport({
     command: "node",
     args: [join(root, "dist", "index.js")],
-    env: { ...process.env, DOTA2_ADDON_DIR: tmp },
+    // Point the reference library at the throwaway addon dir so reflib checks are deterministic.
+    env: { ...process.env, DOTA2_ADDON_DIR: tmp, DOTA2_REFLIB_DIR: join(tmp, "reflib") },
   });
   const client = new Client({ name: "smoke", version: "1.0.0" });
   await client.connect(transport);
@@ -67,7 +68,14 @@ async function main() {
     "assets_list", "assets_search", "vpk_find", "vpk_read", "base_kv_entry",
     "scaffold_custom_event", "scaffold_net_table",
     "entity_catalog", "map_terrain", "map_build", "map_preview", "map_tile_to_world", "scaffold_td",
-    "workshop_list", "workshop_inspect", "workshop_read", "workshop_search", "workshop_download",
+    "workshop_list", "workshop_inspect", "workshop_read", "workshop_search", "workshop_download", "workshop_grep",
+    "dota_window", "dota_focus_window", "dota_click", "dota_type", "dota_input", "dota_status", "dota_wait_for", "dota_selftest",
+    "addon_attach_debug_sdk", "addon_detach_debug_sdk", "dota_lua_eval", "dota_debug_dump",
+    "ref_harvest", "ref_list", "ref_search", "ref_inspect", "ref_get", "ref_curate", "ref_stats", "ref_passport", "ref_find",
+    "asset_preview",
+    "scaffold_notifications", "scaffold_nettable_binding", "scaffold_rpc", "panorama_decompile",
+    "scaffold_save_codes", "scaffold_hud_panel", "scaffold_wave_system",
+    "addon_audit", "ref_recipe", "dota_perf", "scaffold_shop", "scaffold_talent_tree", "ref_harvest_top",
   ]) {
     check(`tool present: ${expected}`, names.includes(expected));
   }
@@ -248,6 +256,152 @@ async function main() {
   if (hasItems && /2860562213|Spin TD/i.test(textOf(wl))) {
     const wr = await client.callTool({ name: "workshop_read", arguments: { id: "2860562213", path: "scripts/vscripts/game/waves.lua", maxChars: 3000 } });
     check("workshop_read reads Spin TD waves.lua", /waveTable/.test(textOf(wr)));
+    const wg = await client.callTool({ name: "workshop_grep", arguments: { id: "2860562213", query: "waveTable", ext: "lua" } });
+    check("workshop_grep finds code in a downloaded game", !wg.isError && /waveTable/.test(textOf(wg)) && /waves\.lua:/.test(textOf(wg)));
+  }
+  const wgNone = await client.callTool({ name: "workshop_grep", arguments: { id: "0", query: "x" } });
+  check("workshop_grep errors gracefully for a missing game", wgNone.isError === true);
+
+  // 18) DebugSDK attach/detach against the temp addon (no game needed)
+  const attach = await client.callTool({ name: "addon_attach_debug_sdk", arguments: {} });
+  check("addon_attach_debug_sdk runs", !attach.isError, textOf(attach).slice(0, 200));
+  const sdkLua = join(tmp, "game", "scripts", "vscripts", "mcp_debug.lua");
+  check("DebugSDK lua copied into addon", existsSync(sdkLua));
+  if (existsSync(sdkLua)) {
+    const c = await readFile(sdkLua, "utf8");
+    check("DebugSDK lua registers mcp_ping", c.includes("mcp_ping") && c.includes("Convars:RegisterCommand"));
+  }
+  const attachDry = await client.callTool({ name: "addon_attach_debug_sdk", arguments: { dryRun: true } });
+  check("addon_attach_debug_sdk dryRun runs", !attachDry.isError && /dry run/i.test(textOf(attachDry)));
+  const detach = await client.callTool({ name: "addon_detach_debug_sdk", arguments: {} });
+  check("addon_detach_debug_sdk removes the lua", !detach.isError && !existsSync(sdkLua));
+
+  // 19) reference library — offline against the temp reflib dir
+  const refStats = await client.callTool({ name: "ref_stats", arguments: {} });
+  check("ref_stats runs (empty library)", !refStats.isError && /0 games/.test(textOf(refStats)));
+  const refList = await client.callTool({ name: "ref_list", arguments: {} });
+  check("ref_list runs (empty)", !refList.isError && /empty/i.test(textOf(refList)));
+  const refSearch = await client.callTool({ name: "ref_search", arguments: { query: "CreateUnitByName" } });
+  check("ref_search on empty library errors gracefully", refSearch.isError === true);
+  const refHarvestNoArgs = await client.callTool({ name: "ref_harvest", arguments: {} });
+  check("ref_harvest requires query or ids", refHarvestNoArgs.isError === true);
+  const refPassportNone = await client.callTool({ name: "ref_passport", arguments: { id: "0" } });
+  check("ref_passport errors gracefully for unknown game", refPassportNone.isError === true);
+  const refFindNone = await client.callTool({ name: "ref_find", arguments: { query: "phoenix" } });
+  check("ref_find errors gracefully on empty library", refFindNone.isError === true);
+  const previewNone = await client.callTool({ name: "asset_preview", arguments: { query: "zzz_no_such_asset_zzz", kind: "texture" } });
+  check("asset_preview errors gracefully when nothing matches", previewNone.isError === true);
+
+  // 20) control + debug tools respond sanely whether or not a game is running
+  const status = await client.callTool({ name: "dota_status", arguments: {} });
+  check("dota_status runs", !status.isError && /install:|window:|vconsole:/.test(textOf(status)));
+  const win = await client.callTool({ name: "dota_window", arguments: { action: "info" } });
+  check("dota_window info responds (image/result or clean error)", win !== undefined && (win.isError === true || /window:|foreground/.test(textOf(win))));
+  const winShot = await client.callTool({ name: "dota_screenshot", arguments: { method: "window", focus: false } });
+  check("dota_screenshot window responds sanely", winShot !== undefined && (winShot.isError === true || (winShot.content ?? []).some((c) => c.type === "image")));
+
+  // graceful failure on a dead port (no game listening)
+  const evalDead = await client.callTool({ name: "dota_lua_eval", arguments: { code: "1+1", vconPort: 29999 } });
+  check("dota_lua_eval errors gracefully with no game", evalDead.isError === true);
+  const dumpDead = await client.callTool({ name: "dota_debug_dump", arguments: { vconPort: 29999 } });
+  check("dota_debug_dump errors gracefully with no game", dumpDead.isError === true);
+  const waitDead = await client.callTool({ name: "dota_wait_for", arguments: { pattern: "nope", vconPort: 29999, timeoutMs: 300 } });
+  check("dota_wait_for errors gracefully with no game", waitDead.isError === true);
+  const selftestDead = await client.callTool({ name: "dota_selftest", arguments: { vconPort: 29999, screenshot: false } });
+  check("dota_selftest reports vconsole failure gracefully", selftestDead.isError === true && /vconsole connect/i.test(textOf(selftestDead)));
+  const perfDead = await client.callTool({ name: "dota_perf", arguments: { action: "fps_overlay", vconPort: 29999 } });
+  check("dota_perf errors gracefully with no game", perfDead.isError === true);
+
+  // 21) systems scaffolders (distilled from shipping games) on the temp addon
+  const notif = await client.callTool({ name: "scaffold_notifications", arguments: {} });
+  check("scaffold_notifications runs", !notif.isError, textOf(notif).slice(0, 160));
+  check("notifications panorama + lua created",
+    existsSync(join(tmp, "content", "panorama", "layout", "custom_game", "mcp_notifications.xml"))
+    && existsSync(join(tmp, "content", "panorama", "styles", "custom_game", "mcp_notifications.css"))
+    && existsSync(join(tmp, "content", "panorama", "scripts", "custom_game", "mcp_notifications.js"))
+    && existsSync(join(tmp, "game", "scripts", "vscripts", "mcp_notifications.lua")));
+  if (existsSync(join(tmp, "content", "panorama", "styles", "custom_game", "mcp_notifications.css"))) {
+    const c = await readFile(join(tmp, "content", "panorama", "styles", "custom_game", "mcp_notifications.css"), "utf8");
+    check("notifications CSS has the pop-in keyframe", /@keyframes ToastIn/.test(c) && /pre-transform-scale2d/.test(c));
+  }
+  const ntbind = await client.callTool({ name: "scaffold_nettable_binding", arguments: { table: "game_state" } });
+  check("scaffold_nettable_binding runs", !ntbind.isError);
+  check("nettable helpers + NetSync created",
+    existsSync(join(tmp, "content", "panorama", "scripts", "custom_game", "nettable_helpers.js"))
+    && existsSync(join(tmp, "game", "scripts", "vscripts", "net_sync.lua")));
+  const rpc = await client.callTool({ name: "scaffold_rpc", arguments: {} });
+  check("scaffold_rpc runs", !rpc.isError);
+  check("rpc client + server created",
+    existsSync(join(tmp, "content", "panorama", "scripts", "custom_game", "rpc.js"))
+    && existsSync(join(tmp, "game", "scripts", "vscripts", "rpc.lua")));
+  if (existsSync(join(tmp, "game", "scripts", "vscripts", "rpc.lua"))) {
+    const c = await readFile(join(tmp, "game", "scripts", "vscripts", "rpc.lua"), "utf8");
+    check("rpc server uses coroutine + correlation id", /coroutine\.wrap/.test(c) && /__rpc/.test(c) && /RegisterListener/.test(c));
+  }
+  // overwrite guard
+  const notif2 = await client.callTool({ name: "scaffold_notifications", arguments: {} });
+  check("scaffold_notifications refuses overwrite by default", notif2.isError === true && /overwrite=true/.test(textOf(notif2)));
+
+  // 22) panorama_decompile graceful error for an unavailable game
+  const dec = await client.callTool({ name: "panorama_decompile", arguments: { id: "0" } });
+  check("panorama_decompile errors gracefully for missing game", dec.isError === true);
+
+  // 23) more systems scaffolders
+  const sc = await client.callTool({ name: "scaffold_save_codes", arguments: { fields: ["level", "gold", "wins"] } });
+  check("scaffold_save_codes runs", !sc.isError);
+  const scLua = join(tmp, "game", "scripts", "vscripts", "save_codes.lua");
+  check("save_codes.lua created", existsSync(scLua));
+  if (existsSync(scLua)) {
+    const c = await readFile(scLua, "utf8");
+    check("save_codes has Encode/Decode + checksum + schema", /function SaveCodes:Encode/.test(c) && /function SaveCodes:Decode/.test(c) && /checksum/.test(c) && /"level", "gold", "wins"/.test(c));
+  }
+  const hud = await client.callTool({ name: "scaffold_hud_panel", arguments: { name: "mystats" } });
+  check("scaffold_hud_panel runs", !hud.isError);
+  check("hud panel xml/css/js created",
+    existsSync(join(tmp, "content", "panorama", "layout", "custom_game", "mystats.xml"))
+    && existsSync(join(tmp, "content", "panorama", "styles", "custom_game", "mystats.css"))
+    && existsSync(join(tmp, "content", "panorama", "scripts", "custom_game", "mystats.js")));
+  if (existsSync(join(tmp, "content", "panorama", "styles", "custom_game", "mystats.css"))) {
+    const c = await readFile(join(tmp, "content", "panorama", "styles", "custom_game", "mystats.css"), "utf8");
+    check("hud CSS has fly-in + hover pop + glow keyframe", /\.Shown/.test(c) && /:hover/.test(c) && /@keyframes HudGlow/.test(c) && /gradient\(/.test(c));
+  }
+  const wv = await client.callTool({ name: "scaffold_wave_system", arguments: {} });
+  check("scaffold_wave_system runs", !wv.isError);
+  const wvLua = join(tmp, "game", "scripts", "vscripts", "waves.lua");
+  check("waves.lua created", existsSync(wvLua));
+  if (existsSync(wvLua)) {
+    const c = await readFile(wvLua, "utf8");
+    check("waves has WAVES table + boss + entity_killed tracking + net table", /Waves\.WAVES/.test(c) && /BOSS/.test(c) && /entity_killed/.test(c) && /CustomNetTables:SetTableValue\("waves"/.test(c));
+  }
+
+  // 24) addon_audit — static checks on the scaffolded temp addon
+  const audit = await client.callTool({ name: "addon_audit", arguments: {} });
+  check("addon_audit runs", !audit.isError && /Audited/.test(textOf(audit)));
+  check("addon_audit flags missing precache", /precache-missing/.test(textOf(audit)));
+
+  // 25) ref_recipe — bridges patterns KB (+ empty library) by topic
+  const recipe = await client.callTool({ name: "ref_recipe", arguments: { query: "save" } });
+  check("ref_recipe returns patterns for a topic", !recipe.isError && /PATTERNS/.test(textOf(recipe)) && /[Ss]ave/.test(textOf(recipe)));
+
+  // 26) scaffold_shop — UI + server purchase handler
+  const shop = await client.callTool({ name: "scaffold_shop", arguments: {} });
+  check("scaffold_shop runs", !shop.isError);
+  check("shop panorama + lua created",
+    existsSync(join(tmp, "content", "panorama", "layout", "custom_game", "shop.xml"))
+    && existsSync(join(tmp, "content", "panorama", "scripts", "custom_game", "shop.js"))
+    && existsSync(join(tmp, "game", "scripts", "vscripts", "shop.lua")));
+  if (existsSync(join(tmp, "game", "scripts", "vscripts", "shop.lua"))) {
+    const c = await readFile(join(tmp, "game", "scripts", "vscripts", "shop.lua"), "utf8");
+    check("shop.lua validates gold + grants item", /GetGold/.test(c) && /ModifyGold/.test(c) && /CreateItem/.test(c) && /shop_buy/.test(c));
+  }
+  const talent = await client.callTool({ name: "scaffold_talent_tree", arguments: {} });
+  check("scaffold_talent_tree runs", !talent.isError);
+  check("talent tree panorama + lua created",
+    existsSync(join(tmp, "content", "panorama", "layout", "custom_game", "talent_tree.xml"))
+    && existsSync(join(tmp, "game", "scripts", "vscripts", "talent_tree.lua")));
+  if (existsSync(join(tmp, "game", "scripts", "vscripts", "talent_tree.lua"))) {
+    const c = await readFile(join(tmp, "game", "scripts", "vscripts", "talent_tree.lua"), "utf8");
+    check("talent_tree validates points + prereqs + syncs net table", /GetPoints/.test(c) && /requires/.test(c) && /talent_pick/.test(c) && /SetTableValue\("talents"/.test(c));
   }
 
   await client.close();

@@ -12,6 +12,10 @@ import { registerAssetTools } from "./tools/assets.tools.js";
 import { registerEventTools } from "./tools/events.tools.js";
 import { registerMapGenTools } from "./tools/mapgen.tools.js";
 import { registerWorkshopTools } from "./tools/workshop.tools.js";
+import { registerControlTools } from "./tools/control.tools.js";
+import { registerDebugSdkTools } from "./tools/debugsdk.tools.js";
+import { registerReflibTools } from "./tools/reflib.tools.js";
+import { registerPreviewTools } from "./tools/preview.tools.js";
 import { apiStats } from "./api/search.js";
 import { panoramaStats } from "./api/panorama.js";
 
@@ -33,6 +37,10 @@ export function createServer(): McpServer {
   registerEventTools(server);
   registerMapGenTools(server);
   registerWorkshopTools(server);
+  registerControlTools(server);
+  registerDebugSdkTools(server);
+  registerReflibTools(server);
+  registerPreviewTools(server);
 
   // A small read-only resource describing the bundled VScript API.
   server.registerResource(
