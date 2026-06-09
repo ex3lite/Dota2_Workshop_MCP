@@ -12,7 +12,12 @@ import { mkdirSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 
 export function assetDbPath(): string {
-  return process.env.DOTA2_ASSETDB || join(homedir(), ".dota2-workshop-mcp", "assets.db");
+  if (process.env.DOTA2_ASSETDB) return process.env.DOTA2_ASSETDB;
+  // The index is a cache of the reference library, so it lives under the library dir — this
+  // keeps it isolated whenever DOTA2_REFLIB_DIR is overridden (e.g. tests, separate corpora).
+  // Mirrors reflibDir() without importing it (reflib.ts imports this module).
+  const base = process.env.DOTA2_REFLIB_DIR || join(homedir(), ".dota2-workshop-mcp", "reflib");
+  return join(base, "assets.db");
 }
 
 let db: DatabaseSync | undefined;

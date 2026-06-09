@@ -14,7 +14,8 @@ import { findFiles, resolveVpk } from "../dota/reflib.js";
 import { ensureVrf, vrfDecode, vrfDecompileText } from "../dota/vrf.js";
 import { requireDotaPaths } from "../dota/paths.js";
 import { decodePng, montage, Rgba } from "../util/imgmontage.js";
-import { parseWav, renderWaveform, fmtDuration } from "../util/waveform.js";
+import { encodeRgbaPng } from "../util/png.js";
+import { parseWav, renderWaveform, fmtDuration, detectAudio, mp3DurationSec, speakerTile } from "../util/waveform.js";
 import { error, guard, ToolResult } from "../util/result.js";
 
 type Kind = "auto" | "texture" | "particle" | "model";
@@ -101,20 +102,22 @@ interface Sound {
   game: string;
   name: string;
   path: string;
+  format?: string; // "wav" | "mp3"
   durationSec?: number;
   bytes?: number;
-  wavUri?: string; // data-uri (HTML player); omitted if too large
-  waveUri?: string; // waveform PNG data-uri
-  wave?: Rgba; // waveform pixels (inline montage)
+  audioUri?: string; // data-uri (HTML player); omitted if too large
+  mime?: string; // audio/wav | audio/mpeg
+  waveUri?: string; // waveform/icon PNG data-uri
+  wave?: Rgba; // waveform/icon pixels (inline montage)
   note?: string;
 }
 
 function soundboardHtml(query: string, sounds: Sound[]): string {
   const rows = sounds
     .map((s, i) => {
-      const player = s.wavUri
-        ? `<audio controls preload="none" src="${s.wavUri}"></audio>`
-        : `<span class="big">${s.note || "audio too large to embed — open the .wav on disk"}</span>`;
+      const player = s.audioUri
+        ? `<audio controls preload="none" src="${s.audioUri}"></audio>`
+        : `<span class="big">${s.note || "audio too large to embed — open the file on disk"}</span>`;
       const wave = s.waveUri ? `<img class="wave" src="${s.waveUri}" />` : "";
       return `<div class="row" data-name="${(s.name + " " + s.game).toLowerCase()}">
   <div class="idx">${i + 1}</div>
@@ -311,24 +314,35 @@ export function registerPreviewTools(server: McpServer) {
         const snd: Sound = { id: m.id, game: m.title, name, path: m.path };
         try {
           const out = await vrfDecode(vpk, m.path, join(outDir, "_d"));
-          const wav = out.find((f) => /\.(wav|mp3)$/i.test(f));
-          if (!wav) {
+          const audio = out.find((f) => /\.(wav|mp3)$/i.test(f));
+          if (!audio) {
             snd.note = "decode produced no audio";
           } else {
-            const wavName = `sound_${sounds.length}.wav`;
-            await copyFile(wav, join(outDir, wavName)).catch(() => {});
-            const buf = await readFile(wav);
+            const buf = await readFile(audio);
             snd.bytes = buf.length;
-            try {
-              const info = parseWav(buf);
-              snd.durationSec = info.durationSec;
-              const wave = renderWaveform(info.samples, { width: 320, height: 96 });
-              snd.wave = wave;
-              snd.waveUri = "data:image/png;base64," + montage([{ img: wave, label: "" }], { cell: 320, cols: 1, pad: 0 }).toString("base64");
-            } catch (e) {
-              snd.note = `waveform failed: ${e instanceof Error ? e.message : e}`;
+            const { format, mime } = detectAudio(buf);
+            snd.format = format;
+            snd.mime = mime;
+            const fileExt = format === "wav" ? "wav" : format === "mp3" ? "mp3" : "bin";
+            await copyFile(audio, join(outDir, `sound_${sounds.length}.${fileExt}`)).catch(() => {});
+            // Visual tile: a real amplitude waveform for PCM, a speaker icon for MP3.
+            let tile: Rgba;
+            if (format === "wav") {
+              try {
+                const info = parseWav(buf);
+                snd.durationSec = info.durationSec;
+                tile = renderWaveform(info.samples, { width: 320, height: 96 });
+              } catch (e) {
+                tile = speakerTile({ width: 320, height: 96 });
+                snd.note = `waveform failed: ${e instanceof Error ? e.message : e}`;
+              }
+            } else {
+              if (format === "mp3") snd.durationSec = mp3DurationSec(buf) || undefined;
+              tile = speakerTile({ width: 320, height: 96 });
             }
-            if (buf.length <= MAX_EMBED_BYTES) snd.wavUri = "data:audio/wav;base64," + buf.toString("base64");
+            snd.wave = tile;
+            snd.waveUri = "data:image/png;base64," + encodeRgbaPng(tile.width, tile.height, tile.rgba).toString("base64");
+            if (buf.length <= MAX_EMBED_BYTES) snd.audioUri = `data:${mime};base64,` + buf.toString("base64");
           }
         } catch (e) {
           snd.note = `decode failed: ${e instanceof Error ? e.message : e}`;
@@ -348,12 +362,15 @@ export function registerPreviewTools(server: McpServer) {
       await writeFile(join(outDir, "waveforms.png"), sheet).catch(() => {});
 
       const decoded = sounds.filter((s) => s.wave).length;
+      const wavCount = sounds.filter((s) => s.format === "wav").length;
+      const mp3Count = sounds.filter((s) => s.format === "mp3").length;
       const legend = sounds
-        .map((s, i) => `  ${String(i + 1).padStart(2)}. ${s.wave ? "🔊" : "·"} ${s.name}  (${s.game})${s.durationSec ? " · " + fmtDuration(s.durationSec) : ""}${s.note ? "  — " + s.note : ""}`)
+        .map((s, i) => `  ${String(i + 1).padStart(2)}. ${s.wave ? "🔊" : "·"} ${s.name}  (${s.game})${s.format ? " · " + s.format.toUpperCase() : ""}${s.durationSec ? " · " + fmtDuration(s.durationSec) : ""}${s.note ? "  — " + s.note : ""}`)
         .join("\n");
       const summary =
-        `Sound preview "${query}": ${sounds.length} sound(s), ${decoded} decoded. Waveforms below (numbered). ` +
-        `Playable audio is inlined for the first few; the HTML soundboard plays them all.\n` +
+        `Sound preview "${query}": ${sounds.length} sound(s), ${decoded} decoded` +
+        `${mp3Count ? ` (${wavCount} PCM waveform, ${mp3Count} MP3 → speaker icon, can't waveform MP3 out-of-engine)` : ""}. ` +
+        `Tiles below (numbered). Playable audio is inlined for the first few; the HTML soundboard plays them all.\n` +
         `Soundboard: ${htmlPath}\n${legend}`;
 
       const content: ToolResult["content"] = [
@@ -363,8 +380,8 @@ export function registerPreviewTools(server: McpServer) {
       // Inline playable audio for the first few small sounds (clients that render audio).
       for (const s of sounds) {
         if (inlineAudio >= MAX_INLINE_AUDIO) break;
-        if (s.wavUri) {
-          content.push({ type: "audio", data: s.wavUri.split(",")[1], mimeType: "audio/wav" });
+        if (s.audioUri && s.mime) {
+          content.push({ type: "audio", data: s.audioUri.split(",")[1], mimeType: s.mime });
           inlineAudio++;
         }
       }
@@ -377,7 +394,7 @@ export function registerPreviewTools(server: McpServer) {
           soundboard: htmlPath,
           count: sounds.length,
           decoded,
-          sounds: sounds.map(({ wave, wavUri, waveUri, ...s }) => s), // drop heavy blobs/pixels
+          sounds: sounds.map(({ wave, audioUri, waveUri, ...s }) => s), // drop heavy blobs/pixels
         },
       };
     }),

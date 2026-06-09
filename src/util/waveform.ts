@@ -121,3 +121,100 @@ export function fmtDuration(sec: number): string {
   const s = Math.floor(sec % 60);
   return sec < 10 ? `${sec.toFixed(1)}s` : `${m}:${String(s).padStart(2, "0")}`;
 }
+
+// ----- audio container detection ------------------------------------------
+// Dota ships most sounds MP3-compressed; ValveResourceFormat dumps the original stream,
+// so a decoded ".vsnd" is often MP3, sometimes PCM WAV. We can render a real waveform from
+// PCM, but not from MP3 without a decoder — so MP3 gets duration (cheaply, by walking frame
+// headers) + a speaker-icon placeholder tile, and still plays in the soundboard / inline.
+
+export type AudioFormat = "wav" | "mp3" | "unknown";
+
+export function detectAudio(buf: Buffer): { format: AudioFormat; mime: string } {
+  if (buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WAVE") {
+    return { format: "wav", mime: "audio/wav" };
+  }
+  // ID3v2 tag or an MPEG audio frame sync (0xFFE.)
+  if (buf.length >= 3 && buf.toString("ascii", 0, 3) === "ID3") return { format: "mp3", mime: "audio/mpeg" };
+  if (buf.length >= 2 && buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return { format: "mp3", mime: "audio/mpeg" };
+  return { format: "unknown", mime: "application/octet-stream" };
+}
+
+const MP3_BITRATE = {
+  // [versionGroup][bitrateIndex] in kbps. versionGroup: 1 = MPEG1, 2 = MPEG2/2.5 (Layer III).
+  1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+  2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+} as const;
+const MP3_SAMPLERATE = {
+  3: [44100, 48000, 32000, 0], // MPEG1
+  2: [22050, 24000, 16000, 0], // MPEG2
+  0: [11025, 12000, 8000, 0], // MPEG2.5
+} as const;
+
+/** Sum MP3 frame durations by walking frame headers (handles CBR + VBR). Returns seconds. */
+export function mp3DurationSec(buf: Buffer): number {
+  let p = 0;
+  // Skip an ID3v2 tag (syncsafe size in bytes 6..9).
+  if (buf.length > 10 && buf.toString("ascii", 0, 3) === "ID3") {
+    const size = ((buf[6] & 0x7f) << 21) | ((buf[7] & 0x7f) << 14) | ((buf[8] & 0x7f) << 7) | (buf[9] & 0x7f);
+    p = 10 + size;
+  }
+  let samples = 0;
+  let sampleRate = 0;
+  let frames = 0;
+  while (p + 4 <= buf.length && frames < 500_000) {
+    if (buf[p] !== 0xff || (buf[p + 1] & 0xe0) !== 0xe0) { p++; continue; } // resync
+    const verBits = (buf[p + 1] >> 3) & 0x3; // 0=2.5,2=2,3=1
+    const layerBits = (buf[p + 1] >> 1) & 0x3; // 1=III
+    const brIndex = (buf[p + 2] >> 4) & 0xf;
+    const srIndex = (buf[p + 2] >> 2) & 0x3;
+    const padding = (buf[p + 2] >> 1) & 0x1;
+    if (verBits === 1 || layerBits === 0 || brIndex === 0 || brIndex === 15 || srIndex === 3) { p++; continue; }
+    const verGroup = verBits === 3 ? 1 : 2;
+    const bitrate = MP3_BITRATE[verGroup][brIndex] * 1000;
+    const sr = MP3_SAMPLERATE[verBits as 0 | 2 | 3][srIndex];
+    if (!bitrate || !sr) { p++; continue; }
+    const spf = verBits === 3 ? 1152 : 576; // samples/frame, Layer III
+    const frameLen = Math.floor((spf / 8 * bitrate) / sr) + padding;
+    if (frameLen < 4) { p++; continue; }
+    samples += spf;
+    sampleRate = sr;
+    frames++;
+    p += frameLen;
+  }
+  return sampleRate ? samples / sampleRate : 0;
+}
+
+/** A speaker-icon placeholder tile (for sounds we can play but can't waveform, e.g. MP3). */
+export function speakerTile(opts: { width?: number; height?: number } = {}): Rgba {
+  const W = opts.width ?? 320;
+  const H = opts.height ?? 96;
+  const rgba = Buffer.alloc(W * H * 4);
+  for (let i = 0; i < W * H; i++) { rgba[i * 4] = 22; rgba[i * 4 + 1] = 27; rgba[i * 4 + 2] = 38; rgba[i * 4 + 3] = 255; }
+  const cx = W >> 1;
+  const cy = H >> 1;
+  const s = Math.min(W, H) * 0.28; // icon scale
+  const put = (x: number, y: number, r: number, g: number, b: number) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const d = (y * W + x) * 4;
+    rgba[d] = r; rgba[d + 1] = g; rgba[d + 2] = b; rgba[d + 3] = 255;
+  };
+  // speaker body (square) + cone (triangle), in a soft cyan
+  const [r, g, b] = [120, 200, 220];
+  const bodyX0 = Math.round(cx - s * 1.1), bodyX1 = Math.round(cx - s * 0.5);
+  for (let y = Math.round(cy - s * 0.4); y <= Math.round(cy + s * 0.4); y++)
+    for (let x = bodyX0; x <= bodyX1; x++) put(x, y, r, g, b);
+  for (let y = Math.round(cy - s); y <= Math.round(cy + s); y++) {
+    const frac = 1 - Math.abs(y - cy) / s; // widens toward centre line
+    const x1 = Math.round(cx - s * 0.5 + s * frac);
+    for (let x = bodyX1; x <= x1; x++) put(x, y, r, g, b);
+  }
+  // two "sound wave" arcs
+  for (let a = -45; a <= 45; a += 2) {
+    const rad = (a * Math.PI) / 180;
+    for (const rr of [s * 1.0, s * 1.5]) {
+      put(Math.round(cx + s * 0.7 + Math.cos(rad) * rr), Math.round(cy + Math.sin(rad) * rr), r, g, b);
+    }
+  }
+  return { width: W, height: H, rgba };
+}

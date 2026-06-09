@@ -1,6 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseWav, renderWaveform, fmtDuration } from "../src/util/waveform.js";
+import { parseWav, renderWaveform, fmtDuration, detectAudio, mp3DurationSec, speakerTile } from "../src/util/waveform.js";
+
+// K contiguous MPEG1 Layer III frames, 128kbps @ 44100Hz (frame length 417 bytes).
+function makeMp3(frames: number): Buffer {
+  const FRAME = 417;
+  const buf = Buffer.alloc(frames * FRAME);
+  for (let f = 0; f < frames; f++) {
+    const o = f * FRAME;
+    buf[o] = 0xff; buf[o + 1] = 0xfb; buf[o + 2] = 0x90; buf[o + 3] = 0x00; // 128k/44100/LIII/MPEG1
+  }
+  return buf;
+}
 
 // Build a canonical 16-bit PCM WAV in memory.
 function makeWav(samples: Float32Array, sampleRate: number, channels = 1): Buffer {
@@ -73,4 +84,36 @@ test("fmtDuration formats sub-10s and longer", () => {
   assert.equal(fmtDuration(0.4), "0.4s");
   assert.equal(fmtDuration(75), "1:15");
   assert.equal(fmtDuration(0), "0:00");
+});
+
+test("detectAudio distinguishes WAV / MP3 / unknown", () => {
+  const wavBuf = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE"), Buffer.alloc(8)]);
+  assert.deepEqual(detectAudio(wavBuf), { format: "wav", mime: "audio/wav" });
+  assert.deepEqual(detectAudio(makeMp3(1)), { format: "mp3", mime: "audio/mpeg" });
+  assert.deepEqual(detectAudio(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20)])), { format: "mp3", mime: "audio/mpeg" });
+  assert.equal(detectAudio(Buffer.from("random bytes here")).format, "unknown");
+});
+
+test("mp3DurationSec walks frames (CBR) within tolerance", () => {
+  const frames = 20;
+  const expected = (frames * 1152) / 44100; // ~0.522s
+  const got = mp3DurationSec(makeMp3(frames));
+  assert.ok(Math.abs(got - expected) < 0.02, `expected ~${expected.toFixed(3)}s, got ${got.toFixed(3)}s`);
+});
+
+test("mp3DurationSec skips an ID3v2 tag", () => {
+  const id3 = Buffer.alloc(10);
+  id3.write("ID3", 0, "ascii");
+  // syncsafe size = 0 -> tag is just the 10-byte header
+  const buf = Buffer.concat([id3, makeMp3(10)]);
+  const got = mp3DurationSec(buf);
+  assert.ok(Math.abs(got - (10 * 1152) / 44100) < 0.02, `got ${got}`);
+});
+
+test("speakerTile returns an opaque image of the requested size", () => {
+  const t = speakerTile({ width: 200, height: 80 });
+  assert.equal(t.width, 200);
+  assert.equal(t.height, 80);
+  assert.equal(t.rgba.length, 200 * 80 * 4);
+  assert.equal(t.rgba[3], 255); // opaque
 });
