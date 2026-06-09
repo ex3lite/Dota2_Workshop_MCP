@@ -13,7 +13,8 @@ import { readFile, writeFile, mkdir, rm, copyFile } from "node:fs/promises";
 import { findFiles, resolveVpk } from "../dota/reflib.js";
 import { ensureVrf, vrfDecode, vrfDecompileText } from "../dota/vrf.js";
 import { requireDotaPaths } from "../dota/paths.js";
-import { json, error, guard, ToolResult } from "../util/result.js";
+import { decodePng, montage, Rgba } from "../util/imgmontage.js";
+import { error, guard, ToolResult } from "../util/result.js";
 
 type Kind = "auto" | "texture" | "particle" | "model";
 const EXT: Record<Exclude<Kind, "auto">, string> = { texture: "vtex_c", particle: "vpcf_c", model: "vmdl_c" };
@@ -24,7 +25,8 @@ interface Card {
   name: string;
   path: string;
   kind: string;
-  png?: string; // data-uri
+  png?: string; // data-uri (for the HTML gallery)
+  rgba?: Rgba; // decoded pixels (for the inline montage)
   glb?: string; // relative filename
   note?: string;
 }
@@ -38,12 +40,19 @@ function texRefs(vpcfText: string): string[] {
   return [...new Set([...vpcfText.matchAll(/"([^"]*\.vtex)"/g)].map((m) => m[1]))];
 }
 
-async function dataUri(pngPath: string): Promise<string | undefined> {
+// Load a decoded PNG both as a data-uri (HTML gallery) and as raw RGBA (inline montage).
+async function loadPreview(pngPath: string): Promise<{ uri?: string; rgba?: Rgba }> {
   const buf = await readFile(pngPath).catch(() => undefined);
-  if (!buf || !buf.length) return undefined;
-  // Cap embedded thumbnails so the gallery stays light.
-  if (buf.length > 4_000_000) return undefined;
-  return "data:image/png;base64," + buf.toString("base64");
+  if (!buf || !buf.length) return {};
+  let rgba: Rgba | undefined;
+  try {
+    rgba = decodePng(buf);
+  } catch {
+    rgba = undefined; // exotic encoding VRF emitted that our decoder doesn't handle — montage skips it
+  }
+  // Cap embedded thumbnails so the HTML gallery stays light (montage still uses rgba).
+  const uri = buf.length > 4_000_000 ? undefined : "data:image/png;base64," + buf.toString("base64");
+  return { uri, rgba };
 }
 
 function galleryHtml(query: string, cards: Card[]): string {
@@ -138,7 +147,11 @@ export function registerPreviewTools(server: McpServer) {
           if (m.kind === "texture") {
             const out = await vrfDecode(vpk, m.path, join(outDir, "_d"));
             const png = out.find((f) => f.endsWith(".png"));
-            if (png) card.png = await dataUri(png);
+            if (png) {
+              const p = await loadPreview(png);
+              card.png = p.uri;
+              card.rgba = p.rgba;
+            }
           } else if (m.kind === "model") {
             const out = await vrfDecode(vpk, m.path, outDir, { glb: true });
             const glb = out.find((f) => f.endsWith(".glb"));
@@ -160,24 +173,53 @@ export function registerPreviewTools(server: McpServer) {
               }
               if (decoded) break;
             }
-            if (decoded) card.png = await dataUri(decoded);
-            else card.note = refs.length ? `uses ${refs[0].split("/").pop()} (texture not found locally)` : "no texture ref";
+            if (decoded) {
+              const p = await loadPreview(decoded);
+              card.png = p.uri;
+              card.rgba = p.rgba;
+            } else card.note = refs.length ? `uses ${refs[0].split("/").pop()} (texture not found locally)` : "no texture ref";
           }
         } catch (e) {
           card.note = `decode failed: ${e instanceof Error ? e.message : e}`;
         }
-        if (card.png) pngN++;
+        if (card.png || card.rgba) pngN++;
         cards.push(card);
       }
       await rm(join(outDir, "_d"), { recursive: true, force: true }).catch(() => {});
 
       const htmlPath = join(outDir, "gallery.html");
       await writeFile(htmlPath, galleryHtml(query, cards), "utf8");
+
+      // Contact-sheet montage so the previews render INLINE in chat — viewable over
+      // remote-access where opening the local HTML in a browser isn't possible.
+      const sheet = montage(cards.map((c, i) => ({ img: c.rgba, label: String(i + 1) })));
+      const montagePath = join(outDir, "montage.png");
+      await writeFile(montagePath, sheet).catch(() => {});
+
+      const legend = cards
+        .map((c, i) => `  ${String(i + 1).padStart(2)}. ${c.rgba ? "🖼" : c.glb ? "🧊" : "·"} ${c.name}  (${c.game})${c.note ? "  — " + c.note : ""}`)
+        .join("\n");
       const summary =
-        `Preview "${query}": ${cards.length} asset(s) — ${pngN} image(s)${glbN ? `, ${glbN} model(s)` : ""}.\n` +
-        `Open the gallery: ${htmlPath}\n` +
-        cards.map((c) => `  ${c.png ? "🖼" : c.glb ? "🧊" : "·"} ${c.name}  (${c.game})  ${c.path}`).join("\n");
-      return json({ query, outDir, gallery: htmlPath, count: cards.length, images: pngN, models: glbN, cards }, summary);
+        `Preview "${query}": ${cards.length} asset(s) — ${pngN} image(s)${glbN ? `, ${glbN} model(s)` : ""}. ` +
+        `Contact sheet below (numbered); models (🧊) are 3D — open the HTML gallery to rotate them.\n` +
+        `Gallery: ${htmlPath}\n${legend}`;
+
+      return {
+        content: [
+          { type: "text", text: summary },
+          { type: "image", data: sheet.toString("base64"), mimeType: "image/png" },
+        ],
+        structuredContent: {
+          query,
+          outDir,
+          gallery: htmlPath,
+          montage: montagePath,
+          count: cards.length,
+          images: pngN,
+          models: glbN,
+          cards: cards.map(({ rgba, ...c }) => c), // drop raw pixels from structured output
+        },
+      };
     }),
   );
 }
