@@ -10,13 +10,17 @@ import os from "node:os";
 const file = process.argv[2] || path.join(os.homedir(), ".dota2-workshop-mcp", "previews", "_studio", "selections.json");
 const dir = path.dirname(file);
 let lastMtime = "";
+let lastEmitted = null; // last selection CONTENT we surfaced — dedupe identical re-submits
 try { lastMtime = String(fs.statSync(file).mtimeMs); } catch { /* not created yet */ }
+try { lastEmitted = fs.readFileSync(file, "utf8").trim(); } catch { /* none yet */ }
 
 let debounce = null;
 function emit() {
   try {
     lastMtime = String(fs.statSync(file).mtimeMs); // claim this write so the backstop won't re-fire
     const c = fs.readFileSync(file, "utf8").trim();
+    if (c === lastEmitted) return; // smart: only react when the SELECTION CHANGED (no spam on repeats)
+    lastEmitted = c;
     process.stdout.write("SELECTION " + (c || "[]") + "\n");
   } catch { /* file vanished mid-rewrite; next event will catch it */ }
 }
