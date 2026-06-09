@@ -8,7 +8,7 @@ import { getVConsole, defaultVconPort, ConsoleLine } from "../dota/vconsole.js";
 import { buildLaunchArgs } from "../dota/launch.js";
 import { run, spawnDetached, killProcess, npmCommand } from "../dota/process.js";
 import { ensureDir } from "../util/fsx.js";
-import { captureDotaWindowPng } from "../dota/capture.js";
+import { captureWindowPng } from "../dota/capture.js";
 import { json, text, image, error, guard, ToolResult } from "../util/result.js";
 
 let sentinelCounter = 0;
@@ -34,8 +34,8 @@ const VCON_HINT =
   "Could not reach the VConsole channel. Launch the game in tools mode first (addon_launch_custom_game), " +
   "and make sure it was started with -tools (and matching -vconport if you overrode it).";
 
-/** Full relaunch helper shared by dota_restart_game and dota_dev_cycle. */
-async function restartGame(
+/** Full relaunch helper shared by dota_restart_game, dota_dev_cycle and dota_selftest. */
+export async function restartGame(
   dota: DotaPaths,
   addon: string,
   map: string,
@@ -258,20 +258,28 @@ export function registerDebugTools(server: McpServer) {
     {
       title: "Capture a screenshot",
       description:
-        "Screenshot the running game. method 'console' uses the in-game `jpeg` command (best when a map is " +
-        "rendering); 'window' captures the dota2 window via the OS (works in tools mode too, but a 3D viewport may " +
-        "be black); 'auto' (default) tries console then falls back to window. Returns the image.",
+        "Screenshot the running game — two distinct variants:\n" +
+        "• method 'game' (a.k.a. 'console'): the in-game RENDER via the `jpeg` console command — the true rendered " +
+        "frame, highest fidelity, best when a map is actually rendering.\n" +
+        "• method 'window': the dota2 WINDOW via the OS, captured with real screen pixels (CopyFromScreen) so the 3D " +
+        "viewport is NOT black; it is focused first by default (focus:false to skip). Works in menus/tools/Panorama too.\n" +
+        "• method 'print': offscreen PrintWindow capture (grabs an occluded/background window, but a GPU 3D viewport " +
+        "may come back black).\n" +
+        "• method 'auto' (default): tries the in-game render, then falls back to a window capture.",
       inputSchema: {
-        method: z.enum(["auto", "console", "window"]).optional(),
-        quality: z.number().int().min(1).max(100).optional().describe("JPEG quality for the console method (default 90)."),
+        method: z.enum(["auto", "game", "console", "window", "print"]).optional(),
+        quality: z.number().int().min(1).max(100).optional().describe("JPEG quality for the in-game render method (default 90)."),
+        focus: z.boolean().optional().describe("For the 'window' method: bring dota2 to the foreground first (default true)."),
         vconPort: z.number().int().min(1).max(65535).optional(),
       },
     },
-    guard(async ({ method, quality, vconPort }): Promise<ToolResult> => {
+    guard(async ({ method, quality, focus, vconPort }): Promise<ToolResult> => {
       const dota = await requireDotaPaths();
-      const mode = method ?? "auto";
+      const raw = method ?? "auto";
+      // Normalize aliases: 'game' === 'console' (in-game render); 'window' === screen capture.
+      const mode = raw === "game" ? "console" : raw;
 
-      // Console method: send `jpeg`, then read the new file from the screenshots dir.
+      // In-game render: send `jpeg`, then read the new file from the screenshots dir.
       if (mode === "console" || mode === "auto") {
         const vc = getVConsole(vconPort);
         let connected = vc.isConnected();
@@ -291,15 +299,22 @@ export function registerDebugTools(server: McpServer) {
           vc.send(`jpeg ${quality ?? 90}`);
           const isImg = (n: string) => /\.(jpe?g|png|tga)$/i.test(n);
           let found: string | undefined;
+          // Pick the NEWEST qualifying image (a brand-new name always beats an old file
+          // merely touched within the window) — not whatever readdir happens to list last.
           for (let i = 0; i < 16 && !found; i++) {
             await sleep(250);
+            let bestScore = -1;
             for (const name of (await readdir(dir).catch(() => [])) as string[]) {
               if (!isImg(name)) continue;
-              if (before.has(name)) {
-                const st = await stat(join(dir, name)).catch(() => null);
-                if (!st || st.mtimeMs < sinceMs) continue;
+              const st = await stat(join(dir, name)).catch(() => null);
+              if (!st) continue;
+              const isNew = !before.has(name);
+              if (!isNew && st.mtimeMs < sinceMs) continue;
+              const score = st.mtimeMs + (isNew ? 1e13 : 0);
+              if (score > bestScore) {
+                bestScore = score;
+                found = name;
               }
-              found = name;
             }
           }
           if (found) {
@@ -317,12 +332,76 @@ export function registerDebugTools(server: McpServer) {
         }
       }
 
-      // Window method (and the auto fallback): capture the dota2 window via the OS.
-      const buf = await captureDotaWindowPng();
-      if (buf && buf.length) {
-        return image(buf.toString("base64"), "image/png", `Screenshot (window capture, ${Math.round(buf.length / 1024)} KB)`);
+      // Window capture (and the auto fallback): grab the dota2 window via the OS.
+      const captureMode = raw === "print" ? "print" : "screen";
+      const res = await captureWindowPng(captureMode, focus !== false);
+      if (res.buf && res.buf.length) {
+        const label = captureMode === "print" ? "PrintWindow, may be black for 3D" : "real screen pixels";
+        return image(res.buf.toString("base64"), "image/png", `Screenshot (window: ${label}, ${Math.round(res.buf.length / 1024)} KB)`);
       }
-      return error("Could not capture a screenshot. Is dota2.exe running with a visible window? (A 3D viewport may capture black via the OS method.)");
+      return error(
+        `Could not capture the dota2 window (${captureMode}). ${res.error ?? ""}`.trim() +
+          " Is dota2.exe running with a visible window?",
+      );
+    }),
+  );
+
+  server.registerTool(
+    "dota_perf",
+    {
+      title: "Sample game performance",
+      description:
+        "Profile the running game over VConsole. action 'vprof': run the server VProf for windowMs and capture the " +
+        "report (top time sinks — find Lua/think hotspots); 'fps_overlay': toggle the on-screen FPS counter " +
+        "(cl_showfps); 'net_graph': toggle the netgraph. Overlays are visual (pair with dota_screenshot); vprof " +
+        "returns the captured report text.",
+      inputSchema: {
+        action: z.enum(["vprof", "fps_overlay", "net_graph"]).optional().describe("Default 'vprof'."),
+        on: z.boolean().optional().describe("For overlay actions: turn on (default) or off."),
+        windowMs: z.number().int().min(500).max(30000).optional().describe("vprof sampling window (default 3000)."),
+        limit: z.number().int().positive().max(400).optional().describe("Max report lines to return (default 120)."),
+        vconPort: z.number().int().min(1).max(65535).optional(),
+      },
+    },
+    guard(async ({ action, on, windowMs, limit, vconPort }): Promise<ToolResult> => {
+      const vc = getVConsole(vconPort);
+      try {
+        if (!vc.isConnected()) await vc.connect();
+      } catch {
+        return error(VCON_HINT);
+      }
+      const act = action ?? "vprof";
+      if (act === "fps_overlay") {
+        const v = on === false ? 0 : 2;
+        await vc.sendAndCapture(`cl_showfps ${v}`, nextSentinel(), 600);
+        return json({ action: act, value: v }, `cl_showfps ${v} (${v ? "on" : "off"}). Use dota_screenshot to see it.`);
+      }
+      if (act === "net_graph") {
+        const v = on === false ? 0 : 1;
+        await vc.sendAndCapture(`net_graph ${v}`, nextSentinel(), 600);
+        return json({ action: act, value: v }, `net_graph ${v} (${v ? "on" : "off"}). Use dota_screenshot to see it.`);
+      }
+      // vprof: on -> wait -> generate report (capture) -> off.
+      const win = windowMs ?? 3000;
+      vc.send("vprof_off");
+      await sleep(150);
+      vc.send("vprof_on");
+      await sleep(win);
+      const report = await vc.sendAndCapture("vprof_generate_report", nextSentinel(), 6000);
+      vc.send("vprof_off");
+      const lines = report.map((l) => l.text).filter((t) => t.trim().length);
+      const cap = limit ?? 120;
+      const shown = lines.slice(0, cap);
+      if (!shown.length) {
+        return json(
+          { action: "vprof", windowMs: win, lineCount: 0 },
+          `vprof produced no output in ${win}ms. The build may gate vprof, or nothing was running. Try 'fps_overlay' for a quick visual check.`,
+        );
+      }
+      return json(
+        { action: "vprof", windowMs: win, lineCount: lines.length, report: shown },
+        `VProf report (${win}ms window, ${lines.length} lines${lines.length > cap ? `, showing ${cap}` : ""}):\n${shown.join("\n")}`,
+      );
     }),
   );
 

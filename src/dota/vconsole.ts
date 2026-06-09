@@ -177,6 +177,37 @@ export class VConsoleClient extends EventEmitter {
     return captured;
   }
 
+  /**
+   * Resolve when a console line satisfies `test`. Optionally scans the recent ring
+   * first (scanRecent) so an already-printed match returns immediately. Returns the
+   * matching line, or undefined on timeout.
+   */
+  async waitForLine(
+    test: (line: ConsoleLine) => boolean,
+    timeoutMs = 10000,
+    scanRecent = false,
+  ): Promise<ConsoleLine | undefined> {
+    if (scanRecent) {
+      const hit = [...this.ring].reverse().find(test);
+      if (hit) return hit;
+    }
+    return new Promise<ConsoleLine | undefined>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const onPrint = (line: ConsoleLine) => {
+        if (test(line)) {
+          clearTimeout(timer);
+          this.off("print", onPrint);
+          resolve(line);
+        }
+      };
+      timer = setTimeout(() => {
+        this.off("print", onPrint);
+        resolve(undefined);
+      }, timeoutMs);
+      this.on("print", onPrint);
+    });
+  }
+
   private onData(d: Buffer): void {
     this.buf = Buffer.concat([this.buf, d]);
     while (this.buf.length >= 12) {
