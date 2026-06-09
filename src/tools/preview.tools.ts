@@ -14,6 +14,7 @@ import { findFiles, resolveVpk } from "../dota/reflib.js";
 import { ensureVrf, vrfDecode, vrfDecompileText } from "../dota/vrf.js";
 import { requireDotaPaths } from "../dota/paths.js";
 import { decodePng, montage, Rgba } from "../util/imgmontage.js";
+import { parseWav, renderWaveform, fmtDuration } from "../util/waveform.js";
 import { error, guard, ToolResult } from "../util/result.js";
 
 type Kind = "auto" | "texture" | "particle" | "model";
@@ -93,6 +94,54 @@ function galleryHtml(query: string, cards: Card[]): string {
 <div class="grid">
 ${cardHtml}
 </div></body></html>`;
+}
+
+interface Sound {
+  id: string;
+  game: string;
+  name: string;
+  path: string;
+  durationSec?: number;
+  bytes?: number;
+  wavUri?: string; // data-uri (HTML player); omitted if too large
+  waveUri?: string; // waveform PNG data-uri
+  wave?: Rgba; // waveform pixels (inline montage)
+  note?: string;
+}
+
+function soundboardHtml(query: string, sounds: Sound[]): string {
+  const rows = sounds
+    .map((s, i) => {
+      const player = s.wavUri
+        ? `<audio controls preload="none" src="${s.wavUri}"></audio>`
+        : `<span class="big">${s.note || "audio too large to embed — open the .wav on disk"}</span>`;
+      const wave = s.waveUri ? `<img class="wave" src="${s.waveUri}" />` : "";
+      return `<div class="row" data-name="${(s.name + " " + s.game).toLowerCase()}">
+  <div class="idx">${i + 1}</div>
+  <div class="info"><div class="nm" title="${s.path}">${s.name}</div><div class="meta">${s.game}${s.durationSec ? " · " + fmtDuration(s.durationSec) : ""}</div></div>
+  ${wave}
+  <div class="play">${player}</div>
+</div>`;
+    })
+    .join("\n");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Sounds: ${query}</title>
+<style>
+  body{background:#0d1017;color:#cdd3e0;font:14px/1.4 system-ui,Segoe UI,sans-serif;margin:0;padding:16px}
+  h1{font-size:18px;margin:0 0 4px}.sub{color:#7c879c;margin-bottom:12px}
+  #q{width:320px;padding:6px 10px;border-radius:6px;border:1px solid #2a3346;background:#161b27;color:#fff;margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:12px;background:#161b27;border:1px solid #222b3d;border-radius:8px;padding:8px 10px;margin-bottom:8px}
+  .idx{width:22px;color:#ffd27a;font-weight:700;text-align:right}
+  .info{width:240px;min-width:200px}.nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta{color:#8b93a7;font-size:12px}
+  img.wave{height:48px;width:240px;background:#11141d;border-radius:4px}
+  .play{flex:1;display:flex;justify-content:flex-end}.play audio{width:100%;max-width:380px}
+  .big{color:#5b647a;font-size:12px}
+</style></head><body>
+<h1>Sound preview — "${query}"</h1>
+<div class="sub">${sounds.length} sound(s). Decoded out-of-engine via ValveResourceFormat. Press play. Type to filter:</div>
+<input id="q" placeholder="filter by name / game…" oninput="for(const r of document.querySelectorAll('.row')){r.style.display=r.dataset.name.includes(this.value.toLowerCase())?'':'none'}">
+${rows}
+</body></html>`;
 }
 
 export function registerPreviewTools(server: McpServer) {
@@ -218,6 +267,117 @@ export function registerPreviewTools(server: McpServer) {
           images: pngN,
           models: glbN,
           cards: cards.map(({ rgba, ...c }) => c), // drop raw pixels from structured output
+        },
+      };
+    }),
+  );
+
+  server.registerTool(
+    "sound_preview",
+    {
+      title: "Preview sounds (out of engine, with a player)",
+      description:
+        "Audition sound assets WITHOUT launching Dota. Searches the downloaded games for matching sounds (.vsnd), " +
+        "decodes them to WAV with ValveResourceFormat, RENDERS each waveform as an image (returned inline so you can " +
+        "SEE the sounds over remote-access) and builds an HTML SOUNDBOARD with a real <audio> player per sound. Small " +
+        "sounds are also embedded inline as playable audio. e.g. sound_preview query=\"explosion\". First run " +
+        "auto-installs the decoder (~100MB, Windows).",
+      inputSchema: {
+        query: z.string().describe("Name substring, e.g. 'explosion', 'coin', 'levelup', 'hit'."),
+        id: z.string().optional().describe("Restrict to one game id."),
+        limit: z.number().int().positive().max(24).optional().describe("Max sounds to decode (default 8; higher = slower/heavier)."),
+      },
+    },
+    guard(async ({ query, id, limit }): Promise<ToolResult> => {
+      const cap = limit ?? 8;
+      const matches = await findFiles(query, { ext: "vsnd_c", id, limit: cap });
+      if (!matches.length) {
+        return error(`No sounds matching "${query}" in the downloaded games. (Download more with workshop_download, or try ref_find ext="vsnd_c".)`);
+      }
+      await ensureVrf();
+
+      const outDir = join(homedir(), ".dota2-workshop-mcp", "previews", "snd-" + slug(query));
+      await rm(outDir, { recursive: true, force: true }).catch(() => {});
+      await mkdir(outDir, { recursive: true });
+
+      const MAX_INLINE_AUDIO = 6; // cap heavy base64 audio blocks in the chat payload
+      const MAX_EMBED_BYTES = 1_400_000; // don't embed huge music loops as data-uris
+      const sounds: Sound[] = [];
+      let inlineAudio = 0;
+      for (const m of matches.slice(0, cap)) {
+        const vpk = await resolveVpk(m.id);
+        if (!vpk) continue;
+        const name = m.path.split("/").pop()!.replace(/\.\w+_c$/, "");
+        const snd: Sound = { id: m.id, game: m.title, name, path: m.path };
+        try {
+          const out = await vrfDecode(vpk, m.path, join(outDir, "_d"));
+          const wav = out.find((f) => /\.(wav|mp3)$/i.test(f));
+          if (!wav) {
+            snd.note = "decode produced no audio";
+          } else {
+            const wavName = `sound_${sounds.length}.wav`;
+            await copyFile(wav, join(outDir, wavName)).catch(() => {});
+            const buf = await readFile(wav);
+            snd.bytes = buf.length;
+            try {
+              const info = parseWav(buf);
+              snd.durationSec = info.durationSec;
+              const wave = renderWaveform(info.samples, { width: 320, height: 96 });
+              snd.wave = wave;
+              snd.waveUri = "data:image/png;base64," + montage([{ img: wave, label: "" }], { cell: 320, cols: 1, pad: 0 }).toString("base64");
+            } catch (e) {
+              snd.note = `waveform failed: ${e instanceof Error ? e.message : e}`;
+            }
+            if (buf.length <= MAX_EMBED_BYTES) snd.wavUri = "data:audio/wav;base64," + buf.toString("base64");
+          }
+        } catch (e) {
+          snd.note = `decode failed: ${e instanceof Error ? e.message : e}`;
+        }
+        sounds.push(snd);
+      }
+      await rm(join(outDir, "_d"), { recursive: true, force: true }).catch(() => {});
+
+      const htmlPath = join(outDir, "soundboard.html");
+      await writeFile(htmlPath, soundboardHtml(query, sounds), "utf8");
+
+      // Stack the waveforms into one tall montage so the sounds are VISIBLE inline.
+      const sheet = montage(
+        sounds.map((s, i) => ({ img: s.wave, label: String(i + 1) })),
+        { cell: 320, cols: 1, pad: 6 },
+      );
+      await writeFile(join(outDir, "waveforms.png"), sheet).catch(() => {});
+
+      const decoded = sounds.filter((s) => s.wave).length;
+      const legend = sounds
+        .map((s, i) => `  ${String(i + 1).padStart(2)}. ${s.wave ? "🔊" : "·"} ${s.name}  (${s.game})${s.durationSec ? " · " + fmtDuration(s.durationSec) : ""}${s.note ? "  — " + s.note : ""}`)
+        .join("\n");
+      const summary =
+        `Sound preview "${query}": ${sounds.length} sound(s), ${decoded} decoded. Waveforms below (numbered). ` +
+        `Playable audio is inlined for the first few; the HTML soundboard plays them all.\n` +
+        `Soundboard: ${htmlPath}\n${legend}`;
+
+      const content: ToolResult["content"] = [
+        { type: "text", text: summary },
+        { type: "image", data: sheet.toString("base64"), mimeType: "image/png" },
+      ];
+      // Inline playable audio for the first few small sounds (clients that render audio).
+      for (const s of sounds) {
+        if (inlineAudio >= MAX_INLINE_AUDIO) break;
+        if (s.wavUri) {
+          content.push({ type: "audio", data: s.wavUri.split(",")[1], mimeType: "audio/wav" });
+          inlineAudio++;
+        }
+      }
+
+      return {
+        content,
+        structuredContent: {
+          query,
+          outDir,
+          soundboard: htmlPath,
+          count: sounds.length,
+          decoded,
+          sounds: sounds.map(({ wave, wavUri, waveUri, ...s }) => s), // drop heavy blobs/pixels
         },
       };
     }),

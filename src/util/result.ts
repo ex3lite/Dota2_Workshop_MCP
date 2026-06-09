@@ -2,7 +2,8 @@
 
 export type ContentItem =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: "image"; data: string; mimeType: string }
+  | { type: "audio"; data: string; mimeType: string };
 
 export interface ToolResult {
   // Index signature so this is assignable to the SDK's CallToolResult (which is
