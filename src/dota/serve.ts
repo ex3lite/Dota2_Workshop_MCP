@@ -62,6 +62,18 @@ export function serveDir(root: string, port = 0): Promise<StaticServer> {
           });
           return;
         }
+        if (req.method === "POST" && reqUrl.startsWith("/api/submit")) {
+          let body = "";
+          req.on("data", (c) => { body += c; if (body.length > 100_000) req.destroy(); });
+          req.on("end", () => {
+            try {
+              const { ids } = JSON.parse(body || "{}") as { ids?: string[] };
+              if (Array.isArray(ids)) { selected.clear(); for (const id of ids) if (typeof id === "string" && id) selected.add(id); persist(); }
+            } catch { /* ignore bad body */ }
+            send({ ids: [...selected], submitted: true });
+          });
+          return;
+        }
         if (req.method === "POST" && reqUrl.startsWith("/api/clear")) { selected.clear(); persist(); return send({ ids: [] }); }
         res.writeHead(404).end("no such api");
         return;

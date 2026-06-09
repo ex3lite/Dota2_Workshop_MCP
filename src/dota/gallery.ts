@@ -13,7 +13,11 @@ export interface GalleryData {
   models: { id: string; name: string; game: string; glb: string }[];
   sounds: { id: string; name: string; game: string; src: string; fmt: string; dur: string }[];
   textures: { id: string; name: string; game: string; src: string }[];
+  modelViewerSrc?: string; // local "model-viewer.min.js" (preferred) or a CDN fallback URL
 }
+
+export const MODEL_VIEWER_VERSION = "3.5.0";
+export const MODEL_VIEWER_CDN = `https://ajax.googleapis.com/ajax/libs/model-viewer/${MODEL_VIEWER_VERSION}/model-viewer.min.js`;
 
 // The canvas particle engine + bootstrap. Kept as a plain (non-template) JS string written
 // to engine.js, so the page's own template literals don't clash with TS interpolation.
@@ -46,25 +50,47 @@ export const ENGINE_JS = `(function(){
   var io=new IntersectionObserver(function(es){es.forEach(function(e){var cv=e.target;if(e.isIntersecting&&!cv._init){cv._init=true;var spec=JSON.parse(cv.getAttribute('data-spec'));var src=cv.getAttribute('data-sprite');(src?loadImg(src):Promise.resolve(null)).then(function(img){start(cv,spec,img||fallbackSprite());});}cv._run=e.isIntersecting&&cv._init?cv._run:cv._run;});},{rootMargin:'100px'});
   document.querySelectorAll('canvas.particle').forEach(function(cv){io.observe(cv);});
 
-  // --- click-to-select hook: a card's "выбрать" button POSTs its ID to the server ---
-  function renderBar(ids){
-    var el=document.getElementById('picked'); if(el) el.textContent = ids.length ? ids.join(', ') : '— ничего —';
-    document.querySelectorAll('.card').forEach(function(c){ c.classList.toggle('selected', ids.indexOf(c.getAttribute('data-id'))>=0); });
+  // --- model loaders: show a spinner until each model-viewer finishes loading ---
+  document.querySelectorAll('model-viewer').forEach(function(mv){
+    var card = mv.closest('.card');
+    mv.addEventListener('load', function(){ if(card) card.classList.remove('loading'); });
+    mv.addEventListener('error', function(){ if(card){ card.classList.remove('loading'); card.classList.add('load-error'); } });
+  });
+
+  // --- selection: toggle LOCALLY, commit only on "Отправить" (submit) ---
+  var picked = {}; // id -> true
+  var SEL_BASE = 'Отправить выбор';
+  function ids(){ return Object.keys(picked); }
+  function esc(s){ return String(s).replace(/[&<>]/g,function(c){return c==='&'?'&amp;':c==='<'?'&lt;':'&gt;';}); }
+  function refresh(){
+    var list = ids(), n = list.length;
+    document.querySelectorAll('.card').forEach(function(c){ c.classList.toggle('selected', !!picked[c.getAttribute('data-id')]); });
+    var cnt=document.getElementById('count'); if(cnt) cnt.textContent=n;
+    var chips=document.getElementById('chips'); if(chips) chips.innerHTML=list.map(function(id){return '<span class="chip" data-id="'+esc(id)+'">'+esc(id)+' ✕</span>';}).join('');
+    var tray=document.getElementById('tray'); if(tray) tray.classList.toggle('show', n>0);
+    var sub=document.getElementById('submit'); if(sub){ sub.disabled=n===0; sub.textContent = n? (SEL_BASE+' ('+n+') →') : (SEL_BASE+' →'); }
   }
-  function loadSel(){ fetch('/api/selections').then(function(r){return r.json();}).then(function(d){renderBar(d.ids||[]);}).catch(function(){}); }
   document.addEventListener('click', function(e){
     var b = e.target && e.target.closest ? e.target.closest('.sel') : null;
-    if(!b) return;
-    e.preventDefault();
-    var id=b.getAttribute('data-id');
-    var card=b.closest('.card');
-    var on=!(card && card.classList.contains('selected'));
-    fetch('/api/pick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:id,on:on})})
-      .then(function(r){return r.json();}).then(function(d){renderBar(d.ids||[]);}).catch(function(){});
+    if(b){ e.preventDefault(); var id=b.getAttribute('data-id'); if(picked[id]) delete picked[id]; else picked[id]=true; refresh(); return; }
+    var chip = e.target && e.target.closest ? e.target.closest('.chip') : null;
+    if(chip){ delete picked[chip.getAttribute('data-id')]; refresh(); return; }
   });
-  var clr=document.getElementById('clear'); if(clr) clr.onclick=function(){ fetch('/api/clear',{method:'POST'}).then(function(r){return r.json();}).then(function(d){renderBar(d.ids||[]);}); };
-  var cp=document.getElementById('copy'); if(cp) cp.onclick=function(){ var t=(document.getElementById('picked')||{}).textContent||''; if(navigator.clipboard) navigator.clipboard.writeText(t); cp.textContent='Скопировано'; setTimeout(function(){cp.textContent='Копировать ID';},1200); };
-  loadSel();
+  var clr=document.getElementById('clearbtn'); if(clr) clr.onclick=function(){ picked={}; refresh(); };
+  function toast(msg,bad){ var t=document.getElementById('toast'); if(!t)return; t.textContent=msg;
+    t.style.background=bad?'#331515':'#10331f'; t.style.color=bad?'#f3a3a3':'#9ff3c2'; t.style.borderColor=bad?'#7d2c2c':'#2c7d52';
+    t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2600); }
+  var sub=document.getElementById('submit');
+  if(sub) sub.onclick=function(){
+    var list=ids(); if(!list.length) return;
+    sub.disabled=true; sub.textContent='Отправляю…';
+    fetch('/api/submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids:list})})
+      .then(function(r){return r.json();})
+      .then(function(){ toast('Отправлено агенту ✓  ('+list.length+')'); sub.textContent='Отправлено ✓'; setTimeout(refresh,1600); })
+      .catch(function(){ toast('Ошибка отправки',1); refresh(); });
+  };
+  // reflect a previously submitted selection (e.g. after refresh)
+  fetch('/api/selections').then(function(r){return r.json();}).then(function(d){ (d.ids||[]).forEach(function(id){picked[id]=true;}); refresh(); }).catch(function(){ refresh(); });
 })();`;
 
 function esc(s: string): string {
@@ -72,85 +98,124 @@ function esc(s: string): string {
 }
 
 export function buildGalleryHtml(d: GalleryData): string {
-  const section = (title: string, sub: string, body: string) =>
-    body.trim() ? `<h2>${esc(title)} <span class="sub">${esc(sub)}</span></h2><div class="grid">${body}</div>` : "";
+  const section = (key: string, title: string, sub: string, count: number, body: string) =>
+    body.trim()
+      ? `<section><h2>${esc(title)} <span class="pill">${count}</span> <span class="sub">${esc(sub)}</span></h2><div class="grid">${body}</div></section>`
+      : "";
 
-  const badge = (id: string) => `<span class="id" title="ID ассета">${esc(id)}</span>`;
-  const sel = (id: string) => `<button class="sel" data-id="${esc(id)}" title="Выбрать / снять">＋ выбрать</button>`;
+  const head = (id: string) =>
+    `<span class="id">${esc(id)}</span><button class="sel" data-id="${esc(id)}" aria-label="select"><span class="t">выбрать</span></button>`;
+  const foot = (name: string, meta: string) =>
+    `<div class="nm" title="${esc(name)}">${esc(name)}</div><div class="mt">${esc(meta)}</div>`;
 
   const particleCards = d.particles
     .map(
-      (p) => `<div class="card" data-id="${esc(p.id)}">${badge(p.id)}${sel(p.id)}<canvas class="particle" width="260" height="220"
-        data-spec='${esc(JSON.stringify(p.spec))}' ${p.sprite ? `data-sprite="${esc(p.sprite)}"` : ""}></canvas>
-      <div class="nm" title="${esc(p.name)}">${esc(p.name)}</div><div class="mt">${esc(p.game)}${p.sprite ? "" : " · generic sprite"}</div></div>`,
+      (p) => `<div class="card" data-id="${esc(p.id)}">${head(p.id)}<div class="view"><canvas class="particle" width="260" height="220"
+        data-spec='${esc(JSON.stringify(p.spec))}' ${p.sprite ? `data-sprite="${esc(p.sprite)}"` : ""}></canvas></div>
+      ${foot(p.name, p.game + (p.sprite ? "" : " · generic sprite"))}</div>`,
     )
     .join("");
 
   const modelCards = d.models
     .map(
-      (m) => `<div class="card" data-id="${esc(m.id)}">${badge(m.id)}${sel(m.id)}<model-viewer src="${esc(m.glb)}" camera-controls auto-rotate disable-zoom
-        shadow-intensity="1" exposure="1.1" style="width:100%;height:220px;background:#05070d"></model-viewer>
-      <div class="nm" title="${esc(m.name)}">${esc(m.name)}</div><div class="mt">${esc(m.game)}</div></div>`,
+      (m) => `<div class="card mdl loading" data-id="${esc(m.id)}">${head(m.id)}<div class="view"><model-viewer src="${esc(m.glb)}"
+        camera-controls auto-rotate disable-zoom rotation-per-second="22deg" interaction-prompt="none" loading="lazy" reveal="auto"
+        shadow-intensity="0.9" exposure="1.05"></model-viewer><div class="spin"></div></div>${foot(m.name, m.game)}</div>`,
     )
     .join("");
 
   const soundCards = d.sounds
     .map(
-      (s) => `<div class="card snd" data-id="${esc(s.id)}">${badge(s.id)}${sel(s.id)}<div class="nm" title="${esc(s.name)}">${esc(s.name)}</div>
-      <div class="mt">${esc(s.game)} · ${esc(s.fmt)} · ${esc(s.dur)}</div>
+      (s) => `<div class="card snd" data-id="${esc(s.id)}">${head(s.id)}${foot(s.name, s.game + " · " + s.fmt + " · " + s.dur)}
       <audio controls preload="none" src="${esc(s.src)}"></audio></div>`,
     )
     .join("");
 
   const textureCards = d.textures
     .map(
-      (t) => `<div class="card" data-id="${esc(t.id)}">${badge(t.id)}${sel(t.id)}<div class="media"><img loading="lazy" src="${esc(t.src)}"></div>
-      <div class="nm" title="${esc(t.name)}">${esc(t.name)}</div><div class="mt">${esc(t.game)}</div></div>`,
+      (t) => `<div class="card" data-id="${esc(t.id)}">${head(t.id)}<div class="media"><img loading="lazy" src="${esc(t.src)}"></div>${foot(t.name, t.game)}</div>`,
     )
     .join("");
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(d.title)}</title>
-<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+<script type="module" src="${esc(d.modelViewerSrc || MODEL_VIEWER_CDN)}"></script>
 <style>
-  :root{color-scheme:dark}
-  body{background:#0a0d14;color:#cdd3e0;font:15px/1.45 system-ui,Segoe UI,sans-serif;margin:0;padding:18px 18px 60px}
-  h1{font-size:20px;margin:0 0 2px} h2{font-size:16px;margin:26px 0 10px;border-bottom:1px solid #1c2434;padding-bottom:6px}
-  .sub{color:#7c879c;font-weight:400;font-size:13px}
-  .lead{color:#8b93a7;margin:0 0 6px;max-width:70ch}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
-  .card{position:relative;background:#121724;border:1px solid #222b3d;border-radius:10px;overflow:hidden}
-  .id{position:absolute;top:7px;left:7px;z-index:5;background:#ffd27a;color:#10131c;font-weight:800;
-     border-radius:7px;padding:2px 9px;font-size:14px;letter-spacing:.5px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
-  canvas.particle{display:block;width:100%;height:220px;background:#05070d}
-  .media{height:220px;display:flex;align-items:center;justify-content:center;background:repeating-conic-gradient(#161b27 0% 25%,#0e121c 0% 50%) 50%/22px 22px}
-  .media img{max-width:100%;max-height:220px}
-  .nm{padding:7px 9px 0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mt{padding:0 9px 9px;color:#8b93a7;font-size:12px}
-  .card.snd{padding:10px}.card.snd .nm,.card.snd .mt{padding:0}.card.snd audio{width:100%;margin-top:8px}
-  .sel{position:absolute;top:7px;right:7px;z-index:6;background:#1c2434;color:#cdd3e0;border:1px solid #2a3346;
-     border-radius:7px;padding:3px 9px;font-size:12px;font-weight:600;cursor:pointer}
-  .sel:hover{background:#26314a}
-  .card.selected{border-color:#3ad17a;box-shadow:0 0 0 2px rgba(58,209,122,.5)}
-  .card.selected .sel{background:#3ad17a;color:#05140b;border-color:#3ad17a}
-  #bar{position:sticky;top:0;z-index:20;background:#0a0d14ee;backdrop-filter:blur(6px);padding:10px 4px;margin:-4px -4px 8px;
-     border-bottom:1px solid #1c2434;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  #bar b{color:#3ad17a}#picked{color:#ffd27a;font-weight:700}
-  #bar button{background:#1c2434;color:#cdd3e0;border:1px solid #2a3346;border-radius:7px;padding:4px 10px;cursor:pointer;font-size:13px}
-  #bar .ok{background:#3ad17a;color:#05140b;border-color:#3ad17a;font-weight:700}
+  :root{color-scheme:dark;--bg:#0a0d13;--panel:#131a28;--panel2:#0e1422;--bd:#222c40;--bd2:#2c374f;--tx:#d8dde9;--mut:#8a93a8;--acc:#35d07f;--gold:#ffce6b}
+  *{box-sizing:border-box}
+  body{background:radial-gradient(1200px 600px at 70% -10%,#10182a 0%,var(--bg) 60%);color:var(--tx);
+    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:16px 18px 120px;-webkit-font-smoothing:antialiased}
+  h1{font-size:21px;font-weight:750;margin:2px 0 2px;letter-spacing:-.2px}
+  .lead{color:var(--mut);margin:0 0 8px;max-width:78ch;font-size:13.5px}
+  h2{font-size:15px;font-weight:700;margin:30px 0 12px;display:flex;align-items:center;gap:9px}
+  .pill{background:#1b2336;color:#aeb8cd;border:1px solid var(--bd);border-radius:999px;padding:1px 9px;font-size:12px;font-weight:700}
+  .sub{color:var(--mut);font-weight:400;font-size:12.5px;margin-left:2px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+  .card{position:relative;background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%);border:1px solid var(--bd);
+    border-radius:13px;overflow:hidden;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;
+    animation:rise .34s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+  .card:hover{transform:translateY(-3px);border-color:var(--bd2);box-shadow:0 10px 26px -12px rgba(0,0,0,.7)}
+  .view{position:relative;height:210px;background:#05070d}
+  canvas.particle{display:block;width:100%;height:210px;background:#05070d}
+  .view model-viewer{width:100%;height:210px;background:radial-gradient(120% 120% at 50% 20%,#141d30 0%,#05070d 70%);--poster-color:transparent}
+  .media{height:210px;display:flex;align-items:center;justify-content:center;background:repeating-conic-gradient(#151b29 0% 25%,#0d1320 0% 50%) 50%/20px 20px}
+  .media img{max-width:100%;max-height:210px;object-fit:contain}
+  .nm{padding:8px 10px 0;font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mt{padding:1px 10px 10px;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card.snd{padding:11px}.card.snd .nm,.card.snd .mt{padding:0}.card.snd audio{width:100%;margin-top:9px;height:34px}
+  .id{position:absolute;top:8px;left:8px;z-index:5;background:var(--gold);color:#181203;font-weight:800;
+    border-radius:8px;padding:2px 9px;font-size:13px;letter-spacing:.4px;box-shadow:0 2px 6px rgba(0,0,0,.45)}
+  .sel{position:absolute;top:8px;right:8px;z-index:6;display:flex;align-items:center;gap:5px;background:#0e1626cc;color:#cfd6e6;
+    border:1px solid var(--bd2);border-radius:9px;padding:4px 10px;font-size:12px;font-weight:650;cursor:pointer;
+    backdrop-filter:blur(4px);transition:all .14s ease}
+  .sel::before{content:"+";font-weight:800;font-size:14px;line-height:1}
+  .sel:hover{background:#1a2740;border-color:#3a486a}
+  .card.selected{border-color:var(--acc);box-shadow:0 0 0 2px rgba(53,208,127,.45),0 10px 26px -12px rgba(0,0,0,.7)}
+  .card.selected .sel{background:var(--acc);color:#04130a;border-color:var(--acc)}
+  .card.selected .sel::before{content:"✓"}
+  .card.selected .sel .t{display:none}
+  .card.selected .sel::after{content:"выбрано"}
+  /* model loader */
+  .spin{position:absolute;top:50%;left:50%;width:26px;height:26px;margin:-13px 0 0 -13px;border:3px solid #28324a;
+    border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
+  .mdl:not(.loading) .spin{display:none}
+  .mdl.load-error .spin{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* bottom selection tray */
+  #tray{position:fixed;left:50%;bottom:18px;transform:translate(-50%,160%);z-index:40;display:flex;align-items:center;gap:14px;
+    max-width:min(960px,94vw);background:#0f1726f2;border:1px solid var(--bd2);border-radius:16px;padding:11px 14px;
+    box-shadow:0 18px 50px -12px rgba(0,0,0,.8);backdrop-filter:blur(10px);transition:transform .26s cubic-bezier(.2,.8,.2,1);opacity:.0}
+  #tray.show{transform:translate(-50%,0);opacity:1}
+  .tinfo{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
+  .tn{font-weight:700;white-space:nowrap}.tn b{color:var(--acc);font-size:17px}
+  .chips{display:flex;gap:6px;overflow-x:auto;max-width:46vw;padding-bottom:1px}
+  .chip{flex:0 0 auto;background:#1a2336;border:1px solid var(--bd2);color:var(--gold);font-weight:700;border-radius:8px;
+    padding:3px 9px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+  .chip:hover{background:#26314a;color:#fff}
+  .tact{display:flex;gap:9px;margin-left:auto}
+  .ghost{background:transparent;color:var(--mut);border:1px solid var(--bd2);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600}
+  .ghost:hover{color:var(--tx);border-color:#3a486a}
+  .primary{background:linear-gradient(180deg,#3ee089,#23b76a);color:#04130a;border:0;border-radius:10px;padding:9px 16px;
+    cursor:pointer;font-size:14px;font-weight:800;box-shadow:0 6px 16px -6px rgba(53,208,127,.6);transition:filter .14s,transform .1s}
+  .primary:hover{filter:brightness(1.07)}.primary:active{transform:translateY(1px)}
+  .primary:disabled{background:#222c40;color:#5b657c;box-shadow:none;cursor:not-allowed}
+  #toast{position:fixed;left:50%;bottom:84px;transform:translate(-50%,12px);z-index:50;background:#10331f;color:#9ff3c2;
+    border:1px solid #2c7d52;border-radius:11px;padding:9px 16px;font-weight:700;opacity:0;pointer-events:none;transition:all .25s}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+  @media(max-width:560px){.chips{max-width:34vw}.lead{display:none}}
 </style></head><body>
-<div id="bar">
-  <b>✓ Выбор:</b> <span id="picked">— ничего —</span>
-  <button id="copy">Копировать ID</button>
-  <button id="clear">Снять всё</button>
-  <span class="mt" style="margin-left:auto">Жми «выбрать» на карточке → выбор уходит агенту</span>
-</div>
 <h1>${esc(d.title)}</h1>
-<p class="lead">Decoded out-of-engine via ValveResourceFormat — no Dota launch. Particles are replayed from their real .vpcf parameters as additive billboards (an approximation, not the engine renderer); models are interactive 3D; sounds have a player. <b style="color:#ffd27a">Кликай «выбрать»</b> на нужных карточках — выбор сразу уходит агенту (или назови ID: P# / M# / S# / T#).</p>
-${section("Particles", `${d.particles.length} — drag nothing, they loop automatically`, particleCards)}
-${section("Models", `${d.models.length} — drag to rotate`, modelCards)}
-${section("Sounds", `${d.sounds.length} — press play`, soundCards)}
-${section("Textures", `${d.textures.length}`, textureCards)}
+<p class="lead">Декодировано вне движка (ValveResourceFormat) — без запуска Доты. Партиклы — живая анимация из реальных .vpcf-параметров (аппроксимация, не движковый рендер); модели — интерактивное 3D; звуки — с плеером. Отметь карточки кнопкой «выбрать» и нажми «Отправить» — выбор уйдёт агенту. Можно и просто назвать ID (P#/M#/S#/T#).</p>
+${section("particles", "Партиклы", "анимация в цикле", d.particles.length, particleCards)}
+${section("models", "Модели", "тяни мышкой, чтобы вращать", d.models.length, modelCards)}
+${section("sounds", "Звуки", "нажми play", d.sounds.length, soundCards)}
+${section("textures", "Текстуры", "", d.textures.length, textureCards)}
+<div id="tray">
+  <div class="tinfo"><span class="tn"><b id="count">0</b> выбрано</span><div id="chips" class="chips"></div></div>
+  <div class="tact"><button id="clearbtn" class="ghost">Очистить</button><button id="submit" class="primary" disabled>Отправить выбор →</button></div>
+</div>
+<div id="toast"></div>
 <script src="engine.js"></script>
 </body></html>`;
 }

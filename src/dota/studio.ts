@@ -4,17 +4,46 @@
 // + the GalleryData so callers can serve it and/or tunnel it.
 
 import { homedir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join, relative, sep, dirname } from "node:path";
 import { readFile, writeFile, mkdir, rm, copyFile } from "node:fs/promises";
+import { pathExists } from "../util/fsx.js";
 import { findFiles, resolveVpk } from "./reflib.js";
 import { ensureVrf, vrfDecode, vrfDecompileText } from "./vrf.js";
 import { requireDotaPaths } from "./paths.js";
 import { parseVpcf } from "./vpcf.js";
 import { parseWav, mp3DurationSec, detectAudio, fmtDuration } from "../util/waveform.js";
-import { buildGalleryHtml, ENGINE_JS, GalleryData } from "./gallery.js";
+import { buildGalleryHtml, ENGINE_JS, GalleryData, MODEL_VIEWER_VERSION, MODEL_VIEWER_CDN } from "./gallery.js";
 
 const FALLBACK = ["explosion", "fire", "spark", "magic", "smoke", "blood", "lightning", "tower", "hit", "ui", "gold"];
 const texRefs = (t: string) => [...new Set([...t.matchAll(/"([^"]*\.vtex)"/g)].map((m) => m[1]))];
+
+// Self-host <model-viewer> so the 3D viewer works without reaching an external CDN (googleapis
+// is often blocked/slow in some regions, leaving model cards blank). Download once + cache,
+// then copy into the gallery dir. Returns the <script src> to use (local, or CDN fallback).
+async function ensureModelViewer(destDir: string): Promise<string> {
+  const cache = join(homedir(), ".dota2-workshop-mcp", "assets", `model-viewer-${MODEL_VIEWER_VERSION}.min.js`);
+  if (!(await pathExists(cache))) {
+    const urls = [
+      MODEL_VIEWER_CDN,
+      `https://cdn.jsdelivr.net/npm/@google/model-viewer@${MODEL_VIEWER_VERSION}/dist/model-viewer.min.js`,
+      `https://unpkg.com/@google/model-viewer@${MODEL_VIEWER_VERSION}/dist/model-viewer.min.js`,
+    ];
+    await mkdir(dirname(cache), { recursive: true });
+    for (const url of urls) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) continue;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > 50_000) { await writeFile(cache, buf); break; } // sanity: real bundle is ~MBs
+      } catch { /* try next mirror */ }
+    }
+  }
+  if (await pathExists(cache)) {
+    await copyFile(cache, join(destDir, "model-viewer.min.js")).catch(() => {});
+    return "model-viewer.min.js";
+  }
+  return MODEL_VIEWER_CDN; // couldn't fetch — fall back to CDN (works where it's reachable)
+}
 
 export interface StudioOptions {
   query?: string;
@@ -189,6 +218,7 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
     }
   }
 
+  data.modelViewerSrc = await ensureModelViewer(dir);
   await writeFile(join(dir, "engine.js"), ENGINE_JS, "utf8");
   await writeFile(join(dir, "index.html"), buildGalleryHtml(data), "utf8");
   await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
