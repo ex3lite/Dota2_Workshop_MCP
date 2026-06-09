@@ -2,7 +2,7 @@
 // exposing it through a tunnel. Read-only, binds to 127.0.0.1, path-traversal guarded.
 
 import http from "node:http";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join, normalize, extname } from "node:path";
 
@@ -32,9 +32,42 @@ export interface StaticServer {
 
 /** Serve `root` over HTTP on 127.0.0.1. Port 0 = pick a free port. */
 export function serveDir(root: string, port = 0): Promise<StaticServer> {
+  // Click-to-select state (the "hook"): the gallery POSTs picked IDs here; we persist them to
+  // selections.json so the agent can read what the user clicked (preview_selections tool).
+  const selFile = join(root, "selections.json");
+  const selected = new Set<string>();
+  try { for (const id of JSON.parse(readFileSync(selFile, "utf8")) as string[]) selected.add(id); } catch { /* none yet */ }
+  const persist = () => { try { writeFileSync(selFile, JSON.stringify([...selected])); } catch { /* ignore */ } };
+
   const server = http.createServer(async (req, res) => {
     try {
-      const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+      // --- selection API ---
+      const reqUrl = req.url || "/";
+      if (reqUrl.startsWith("/api/")) {
+        const send = (obj: unknown) => res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" }).end(JSON.stringify(obj));
+        if (req.method === "GET" && reqUrl.startsWith("/api/selections")) return send({ ids: [...selected] });
+        if (req.method === "POST" && reqUrl.startsWith("/api/pick")) {
+          let body = "";
+          req.on("data", (c) => { body += c; if (body.length > 10_000) req.destroy(); });
+          req.on("end", () => {
+            try {
+              const { id, on } = JSON.parse(body || "{}") as { id?: string; on?: boolean };
+              if (typeof id === "string" && id) {
+                if (on === false) selected.delete(id);
+                else selected.add(id);
+                persist();
+              }
+            } catch { /* ignore bad body */ }
+            send({ ids: [...selected] });
+          });
+          return;
+        }
+        if (req.method === "POST" && reqUrl.startsWith("/api/clear")) { selected.clear(); persist(); return send({ ids: [] }); }
+        res.writeHead(404).end("no such api");
+        return;
+      }
+
+      const urlPath = decodeURIComponent(reqUrl.split("?")[0]);
       let rel = normalize(urlPath).replace(/^(\.\.[/\\])+/, "").replace(/^[/\\]+/, "");
       if (rel === "" || rel.endsWith("/")) rel = join(rel, "index.html");
       const full = join(root, rel);

@@ -26,9 +26,20 @@ export interface StudioOptions {
   title?: string;
 }
 
+export interface ManifestEntry {
+  id: string; // P1 / M1 / S1 / T1 — the badge shown in the gallery
+  kind: "particle" | "model" | "sound" | "texture";
+  name: string;
+  game: string;
+  gameId: string; // workshop id the asset came from
+  path: string; // original VPK inner path (.vpcf_c / .vmdl_c / .vsnd_c / .vtex_c)
+  file: string; // served gallery file (relative)
+}
+
 export interface StudioResult {
   dir: string;
   data: GalleryData;
+  manifest: ManifestEntry[];
   counts: { particles: number; models: number; sounds: number; textures: number };
 }
 
@@ -70,6 +81,7 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
     sounds: [],
     textures: [],
   };
+  const manifest: ManifestEntry[] = [];
 
   // --- particles: parse spec + decode the sprite (dedupe by sprite for variety) ---
   {
@@ -106,7 +118,9 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
       }
       if (!spriteRel && allDup) continue; // pure duplicate of an effect we already show
       usedName.add(name);
-      data.particles.push({ name, game: h.title, sprite: spriteRel, spec });
+      const id = `P${data.particles.length + 1}`;
+      data.particles.push({ id, name, game: h.title, sprite: spriteRel, spec });
+      manifest.push({ id, kind: "particle", name, game: h.title, gameId: h.id, path: h.path, file: spriteRel || "" });
     }
   }
 
@@ -125,7 +139,10 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
       const glb = produced.find((f) => f.endsWith(".glb"));
       if (!glb) { await rm(mdir, { recursive: true, force: true }).catch(() => {}); continue; }
       const rel = `m${i}/` + relative(mdir, glb).split(sep).join("/");
-      data.models.push({ name: h.path.split("/").pop()!.replace(/\.\w+_c$/, ""), game: h.title, glb: rel });
+      const name = h.path.split("/").pop()!.replace(/\.\w+_c$/, "");
+      const id = `M${data.models.length + 1}`;
+      data.models.push({ id, name, game: h.title, glb: rel });
+      manifest.push({ id, kind: "model", name, game: h.title, gameId: h.id, path: h.path, file: rel });
     }
   }
 
@@ -146,7 +163,10 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
       await copyFile(audio, join(dir, rel)).catch(() => {});
       let dur = 0;
       try { dur = format === "wav" ? parseWav(buf).durationSec : mp3DurationSec(buf); } catch { /* unknown */ }
-      data.sounds.push({ name: h.path.split("/").pop()!.replace(/\.\w+_c$/, ""), game: h.title, src: rel, fmt: format.toUpperCase(), dur: fmtDuration(dur) });
+      const name = h.path.split("/").pop()!.replace(/\.\w+_c$/, "");
+      const id = `S${data.sounds.length + 1}`;
+      data.sounds.push({ id, name, game: h.title, src: rel, fmt: format.toUpperCase(), dur: fmtDuration(dur) });
+      manifest.push({ id, kind: "sound", name, game: h.title, gameId: h.id, path: h.path, file: rel });
     }
   }
 
@@ -162,17 +182,22 @@ export async function buildStudioGallery(opts: StudioOptions = {}): Promise<Stud
       if (!png) continue;
       const rel = `tex_${data.textures.length}.png`;
       await copyFile(png, join(dir, rel)).catch(() => {});
-      data.textures.push({ name: h.path.split("/").pop()!.replace(/\.\w+_c$/, ""), game: h.title, src: rel });
+      const name = h.path.split("/").pop()!.replace(/\.\w+_c$/, "");
+      const id = `T${data.textures.length + 1}`;
+      data.textures.push({ id, name, game: h.title, src: rel });
+      manifest.push({ id, kind: "texture", name, game: h.title, gameId: h.id, path: h.path, file: rel });
     }
   }
 
   await writeFile(join(dir, "engine.js"), ENGINE_JS, "utf8");
   await writeFile(join(dir, "index.html"), buildGalleryHtml(data), "utf8");
+  await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   await rm(join(dir, "_d"), { recursive: true, force: true }).catch(() => {});
 
   return {
     dir,
     data,
+    manifest,
     counts: { particles: data.particles.length, models: data.models.length, sounds: data.sounds.length, textures: data.textures.length },
   };
 }

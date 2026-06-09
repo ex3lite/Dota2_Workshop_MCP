@@ -11,7 +11,7 @@ template](https://github.com/ModDota/TypeScript-Addon-Template) it scaffolds **T
 wiring) and drives the template's `npm` scripts. It also has a raw-Lua + `resourcecompiler.exe`
 fallback for non-tstl addons.
 
-> Status: working — **103 tools**, end-to-end tested. It can search the Workshop for custom games by
+> Status: working — **107 tools**, end-to-end tested. It can search the Workshop for custom games by
 > name and download them outside the client (SteamCMD) to study, generates whole playable maps from a spec
 > (terrain shaping via the Dota tile grid + entities + waypoint paths → compile → .vpk), previews them
 > top-down as an image without launching the game, edits KV1 + KV3 (soundevents/particles) data, reads
@@ -42,7 +42,7 @@ fallback for non-tstl addons.
 | **Maps** | `map_create`, `map_add_entity`, `map_to_text`, `map_from_text`, `map_compile`, `map_list` |
 | **Map generation** | `map_build`, `map_terrain`, `map_preview`, `map_tile_to_world`, `entity_catalog`, `scaffold_td` |
 | **Reference games** | `workshop_search`, `workshop_download`, `workshop_list`, `workshop_inspect`, `workshop_read`, `workshop_grep`, `panorama_decompile` |
-| **Asset preview (out of engine)** | `asset_preview` (particles/textures/models → inline contact-sheet image + HTML gallery), `sound_preview` (sounds → inline waveform/icon image + playable HTML soundboard + inline audio) — decoded via ValveResourceFormat, no Dota launch |
+| **Asset preview (out of engine)** | `asset_preview` (particles/textures/models → inline contact-sheet image + HTML gallery), `sound_preview` (sounds → inline waveform/icon image + playable HTML soundboard + inline audio), `preview_studio` / `preview_studio_stop` (interactive gallery + public share link: animated particles, 3D models, audio players, click-to-select), `preview_pick` / `preview_selections` (resolve the IDs the user picked/clicked → game + asset path) — decoded via ValveResourceFormat, no Dota launch |
 | **Sounds & KV3** | `soundevents_list`, `soundevents_get`, `soundevents_upsert`, `kv3_read` |
 | **Assets & base game** | `assets_list`, `assets_search`, `vpk_find`, `vpk_read`, `base_kv_entry` |
 | **Events & net tables** | `scaffold_custom_event`, `scaffold_net_table` |
@@ -262,6 +262,13 @@ contact sheet), so previews are viewable **over remote-access** where opening a 
   usual Dota codec — MP3 can't be waveformed out-of-engine) + an HTML **soundboard** with a real
   `<audio>` player per sound; small sounds are also embedded inline as playable audio. e.g.
   `sound_preview query="explosion"`.
+- **`preview_studio`** — build a rich **interactive** gallery and expose it on a **public share link**
+  (Cloudflare quick tunnel) you open in any browser, including a phone over remote-access. Particles are
+  replayed live as animated additive billboards from their real `.vpcf` parameters (move + glow); models
+  are interactive 3D (rotate); sounds get a player. Every card has a stable **ID** (P#/M#/S#/T#) and a
+  **«выбрать» button**: pick by clicking (the click posts to the gallery server) or by telling the agent
+  the ID. `preview_selections` returns what was clicked, `preview_pick id="M3,P7"` resolves explicit IDs —
+  both map the choice back to the source game + asset path. `preview_studio_stop` tears it down.
 
 ## Built-in references (offline)
 

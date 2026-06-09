@@ -16,7 +16,7 @@ import { requireDotaPaths } from "../dota/paths.js";
 import { decodePng, montage, Rgba } from "../util/imgmontage.js";
 import { encodeRgbaPng } from "../util/png.js";
 import { parseWav, renderWaveform, fmtDuration, detectAudio, mp3DurationSec, speakerTile } from "../util/waveform.js";
-import { buildStudioGallery } from "../dota/studio.js";
+import { buildStudioGallery, ManifestEntry } from "../dota/studio.js";
 import { serveDir, StaticServer } from "../dota/serve.js";
 import { startQuickTunnel, Tunnel } from "../dota/tunnel.js";
 import { json, error, guard, ToolResult } from "../util/result.js";
@@ -414,7 +414,7 @@ export function registerPreviewTools(server: McpServer) {
   );
 
   // One live gallery at a time (server + optional tunnel persist across calls).
-  let live: { srv: StaticServer; tun?: Tunnel; url: string } | undefined;
+  let live: { srv: StaticServer; tun?: Tunnel; url: string; manifest: ManifestEntry[]; dir: string } | undefined;
   async function stopLive() {
     if (!live) return;
     try { live.tun?.stop(); } catch { /* ignore */ }
@@ -462,14 +462,78 @@ export function registerPreviewTools(server: McpServer) {
           shareNote = `tunnel failed (${e instanceof Error ? e.message : e}); serving locally instead`;
         }
       }
-      live = { srv, tun, url };
+      live = { srv, tun, url, manifest: r.manifest, dir: r.dir };
       const c = r.counts;
+      // Compact ID legend so the agent (and user) can refer to each asset by its badge.
+      const legend = r.manifest.map((m) => `  ${m.id.padEnd(4)} ${m.kind.padEnd(8)} ${m.name}  (${m.game})`).join("\n");
       const summary =
         `Live preview gallery: ${url}\n` +
         `${shareNote}\n` +
         `Contents: ${c.particles} particles (animated), ${c.models} models (3D), ${c.sounds} sounds (player), ${c.textures} textures.\n` +
-        `Stays up until preview_studio_stop or the server restarts. Local: ${srv.url}`;
-      return json({ url, local: srv.url, shared: !!tun, counts: c, dir: r.dir }, summary);
+        `Each card shows an ID (P#/M#/S#/T#). Pick either way: CLICK 'выбрать' on cards (then call preview_selections), ` +
+        `or tell me the ID(s) (resolve with preview_pick).\n\n` +
+        `${legend}\n\n` +
+        `Stays up until preview_studio_stop. Local: ${srv.url}`;
+      return json({ url, local: srv.url, shared: !!tun, counts: c, dir: r.dir, manifest: r.manifest }, summary);
+    }),
+  );
+
+  server.registerTool(
+    "preview_pick",
+    {
+      title: "Resolve a chosen preview ID to its asset",
+      description:
+        "Resolve the ID(s) the user picked from the preview_studio gallery (e.g. 'M3', 'P7,T2') back to the concrete " +
+        "asset(s) — kind, name, source game (id + title) and the original VPK path — so you know exactly what was " +
+        "selected and can act on it (open with ref_get/asset_preview, copy it, reference it in code, etc.). Reads the " +
+        "manifest of the currently running gallery.",
+      inputSchema: {
+        ids: z.string().describe("One or more gallery IDs, comma/space separated, e.g. 'M3' or 'P7, T2'. Case-insensitive."),
+      },
+    },
+    guard(async ({ ids }): Promise<ToolResult> => {
+      // Use the in-memory manifest if a gallery is live; else fall back to the last manifest.json on disk.
+      let manifest = live?.manifest;
+      if (!manifest) {
+        const p = join(homedir(), ".dota2-workshop-mcp", "previews", "_studio", "manifest.json");
+        manifest = await readFile(p, "utf8").then((t) => JSON.parse(t) as ManifestEntry[]).catch(() => undefined);
+      }
+      if (!manifest || !manifest.length) return error("No preview gallery manifest found. Run preview_studio first.");
+      const want = ids.toUpperCase().split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+      const picked = want.map((id) => manifest!.find((m) => m.id === id)).filter(Boolean) as ManifestEntry[];
+      const missing = want.filter((id) => !manifest!.some((m) => m.id === id));
+      if (!picked.length) return error(`None of [${want.join(", ")}] match the current gallery. Available: ${manifest.map((m) => m.id).join(", ")}`);
+      const lines = picked.map((m) => `${m.id}: ${m.kind} "${m.name}" — game ${m.game} (${m.gameId}) — ${m.path}`);
+      if (missing.length) lines.push(`(not found: ${missing.join(", ")})`);
+      return json({ picked, missing }, lines.join("\n"));
+    }),
+  );
+
+  server.registerTool(
+    "preview_selections",
+    {
+      title: "Read what the user clicked in the gallery (click-to-select hook)",
+      description:
+        "Return the assets the user selected by CLICKING the 'выбрать' button on cards in the live preview_studio " +
+        "gallery (the click posts the ID to the gallery server, which records it). Resolves each clicked ID to its " +
+        "kind, name, source game (id + title) and original VPK path. Use this after telling the user to pick in the UI: " +
+        "ask them to click, then call this to see their choice. clear=true also resets the selection afterwards.",
+      inputSchema: {
+        clear: z.boolean().optional().describe("Clear the recorded selection after reading it (default false)."),
+      },
+    },
+    guard(async ({ clear }): Promise<ToolResult> => {
+      const dir = live?.dir || join(homedir(), ".dota2-workshop-mcp", "previews", "_studio");
+      const selPath = join(dir, "selections.json");
+      const manifest = live?.manifest
+        || (await readFile(join(dir, "manifest.json"), "utf8").then((t) => JSON.parse(t) as ManifestEntry[]).catch(() => undefined));
+      if (!manifest) return error("No gallery manifest found. Run preview_studio first.");
+      const ids = await readFile(selPath, "utf8").then((t) => JSON.parse(t) as string[]).catch(() => [] as string[]);
+      if (!ids.length) return json({ picked: [] }, "Nothing selected yet. Tell the user to click 'выбрать' on the cards they want, then call preview_selections again.");
+      const picked = ids.map((id) => manifest.find((m) => m.id === id)).filter(Boolean) as ManifestEntry[];
+      const lines = picked.map((m) => `${m.id}: ${m.kind} "${m.name}" — game ${m.game} (${m.gameId}) — ${m.path}`);
+      if (clear) { await writeFile(selPath, "[]", "utf8").catch(() => {}); lines.push("(selection cleared)"); }
+      return json({ picked, ids }, `User selected ${picked.length} asset(s):\n` + lines.join("\n"));
     }),
   );
 
