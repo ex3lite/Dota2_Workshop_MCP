@@ -190,14 +190,18 @@ export function registerPreviewTools(server: McpServer) {
       const cards: Card[] = [];
       let glbN = 0;
       let pngN = 0;
-      for (const m of matches.slice(0, cap)) {
+      for (const [i, m] of matches.slice(0, cap).entries()) {
         const vpk = await resolveVpk(m.id);
         if (!vpk) continue;
+        // Decode each asset into its OWN subdir: vrfDecode reports files by before/after diff,
+        // so a shared dir would make a sprite that two assets share appear "new" only once
+        // (every duplicate would come back empty / blank).
+        const dd = join(outDir, "_d", String(i));
         const name = m.path.split("/").pop()!.replace(/\.\w+_c$/, "");
         const card: Card = { id: m.id, game: m.title, name, path: m.path, kind: m.kind };
         try {
           if (m.kind === "texture") {
-            const out = await vrfDecode(vpk, m.path, join(outDir, "_d"));
+            const out = await vrfDecode(vpk, m.path, dd);
             const png = out.find((f) => f.endsWith(".png"));
             if (png) {
               const p = await loadPreview(png);
@@ -205,7 +209,7 @@ export function registerPreviewTools(server: McpServer) {
               card.rgba = p.rgba;
             }
           } else if (m.kind === "model") {
-            const out = await vrfDecode(vpk, m.path, outDir, { glb: true });
+            const out = await vrfDecode(vpk, m.path, dd, { glb: true });
             const glb = out.find((f) => f.endsWith(".glb"));
             if (glb) {
               const rel = `model_${glbN++}.glb`;
@@ -219,7 +223,7 @@ export function registerPreviewTools(server: McpServer) {
             let decoded: string | undefined;
             for (const ref of refs.slice(0, 3)) {
               for (const src of [vpk, basePak].filter(Boolean) as string[]) {
-                const out = await vrfDecode(src, ref, join(outDir, "_d")).catch(() => [] as string[]);
+                const out = await vrfDecode(src, ref, dd).catch(() => [] as string[]);
                 decoded = out.find((f) => f.endsWith(".png"));
                 if (decoded) break;
               }
@@ -307,13 +311,14 @@ export function registerPreviewTools(server: McpServer) {
       const MAX_EMBED_BYTES = 1_400_000; // don't embed huge music loops as data-uris
       const sounds: Sound[] = [];
       let inlineAudio = 0;
-      for (const m of matches.slice(0, cap)) {
+      for (const [i, m] of matches.slice(0, cap).entries()) {
         const vpk = await resolveVpk(m.id);
         if (!vpk) continue;
+        const dd = join(outDir, "_d", String(i)); // per-asset subdir (see asset_preview note)
         const name = m.path.split("/").pop()!.replace(/\.\w+_c$/, "");
         const snd: Sound = { id: m.id, game: m.title, name, path: m.path };
         try {
-          const out = await vrfDecode(vpk, m.path, join(outDir, "_d"));
+          const out = await vrfDecode(vpk, m.path, dd);
           const audio = out.find((f) => /\.(wav|mp3)$/i.test(f));
           if (!audio) {
             snd.note = "decode produced no audio";
