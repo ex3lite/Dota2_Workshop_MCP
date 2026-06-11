@@ -5,7 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { homedir } from "node:os";
-import { join, isAbsolute, dirname } from "node:path";
+import { join, isAbsolute, dirname, basename } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { generateImage, codexAuthPath, CodexAuthMissingError, SETUP_HELP, type ImageFormat, type InputImage } from "../imagegen/chatgpt.js";
 import { generateImageWeb, WebUnavailableError } from "../imagegen/chatgptweb.js";
@@ -74,14 +74,18 @@ export function registerImageTools(server: McpServer) {
       }
       if (fmt === "webp") warnings.push("webp isn't readable by Dota Panorama/VTEX — use png (or jpg) for in-engine assets; webp is fine for external/preview use.");
 
-      // EDIT mode: load + normalise source image(s) to ≤1024 PNG to keep the request reasonable.
+      // EDIT mode: load + normalise source image(s) to ≤1024 PNG (for both the web upload and Codex inline).
       const editPaths = imageArg ? (Array.isArray(imageArg) ? imageArg : [imageArg]).slice(0, 4) : [];
-      let inputImages: InputImage[] | undefined;
+      let inputImages: InputImage[] | undefined; // Codex (inline base64)
+      let webInputs: Array<{ data: Buffer; name: string }> | undefined; // web (uploaded)
       if (editPaths.length) {
         inputImages = [];
+        webInputs = [];
         for (const p of editPaths) {
-          const png = await loadImageAsPng(isAbsolute(p) ? p : join(homedir(), ".dota2-workshop-mcp", "generated", p));
+          const abs = isAbsolute(p) ? p : join(homedir(), ".dota2-workshop-mcp", "generated", p);
+          const png = await loadImageAsPng(abs);
           inputImages.push({ data: png, mime: "image/png" });
+          webInputs.push({ data: png, name: basename(abs) });
         }
       }
       const editing = !!inputImages?.length;
@@ -98,10 +102,10 @@ export function registerImageTools(server: McpServer) {
       let source = "";
       let transNote = "";
       let transparencyDone = false;
-      const tryWeb = !editing && eng !== "codex";
+      const tryWeb = eng !== "codex"; // web handles BOTH generation and editing (image upload)
       if (tryWeb) {
         try {
-          const web = await generateImageWeb({ prompt, transparent: wantTransparent });
+          const web = await generateImageWeb({ prompt, transparent: wantTransparent, inputImages: editing ? webInputs : undefined });
           buffer = web.png;
           source = "ChatGPT web";
           transparencyDone = wantTransparent; // native alpha

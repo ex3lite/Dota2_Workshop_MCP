@@ -155,12 +155,45 @@ interface SendResult {
   conversationId: string;
 }
 
-/** Post a user message (new conversation, or a follow-up when convId+parentId are given). */
-async function postMessage(s: Session, opts: { text: string; convId?: string; parentId?: string }): Promise<SendResult> {
+// Upload an image so it can be attached to a conversation (for editing). The bytes go to OpenAI's
+// blob storage via a signed URL — that host occasionally connect-times-out, so retry the PUT.
+async function uploadImage(s: Session, bytes: Buffer, name: string): Promise<{ fileId: string; width: number; height: number; size: number }> {
+  const reg = (await (await fetch(`${ORIGIN}/backend-api/files`, {
+    method: "POST",
+    headers: authHeaders(s, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ file_name: name, file_size: bytes.length, use_case: "multimodal" }),
+  })).json().catch(() => ({}))) as { file_id?: string; upload_url?: string };
+  if (!reg.file_id || !reg.upload_url) throw new WebUnavailableError("image file registration failed");
+  let ok = false;
+  for (let attempt = 0; attempt < 4 && !ok; attempt++) {
+    try {
+      const put = await fetch(reg.upload_url, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "image/png", "x-ms-version": "2020-04-08" }, body: new Uint8Array(bytes) });
+      ok = put.ok;
+    } catch {
+      await sleep(1500);
+    }
+  }
+  if (!ok) throw new WebUnavailableError("image upload to storage failed (network)");
+  await fetch(`${ORIGIN}/backend-api/files/${reg.file_id}/uploaded`, { method: "POST", headers: authHeaders(s, { "Content-Type": "application/json" }), body: "{}" }).catch(() => {});
+  // The caller normalises inputs to PNG, so width/height come straight from the IHDR.
+  const width = bytes.length > 24 ? bytes.readUInt32BE(16) : 0;
+  const height = bytes.length > 24 ? bytes.readUInt32BE(20) : 0;
+  return { fileId: reg.file_id, width, height, size: bytes.length };
+}
+
+/** Post a user message. `content` (+ optional attachments) overrides the default text message. */
+async function postMessage(s: Session, opts: { text?: string; content?: unknown; attachments?: unknown[]; convId?: string; parentId?: string }): Promise<SendResult> {
   const sentinel = await getSentinel(s);
+  const message: Record<string, unknown> = {
+    id: randomUUID(),
+    author: { role: "user" },
+    content: opts.content ?? { content_type: "text", parts: [opts.text ?? ""] },
+    create_time: Date.now() / 1000,
+  };
+  if (opts.attachments?.length) message.metadata = { attachments: opts.attachments };
   const body: Record<string, unknown> = {
     action: "next",
-    messages: [{ id: randomUUID(), author: { role: "user" }, content: { content_type: "text", parts: [opts.text] }, create_time: Date.now() / 1000 }],
+    messages: [message],
     parent_message_id: opts.parentId ?? randomUUID(),
     model: "auto",
     timezone_offset_min: -180,
@@ -203,7 +236,7 @@ interface PollResult {
 // "finished_successfully" (the image is authored by the dalle TOOL, so we do NOT filter on author
 // role). Take the latest such asset pointer; previews sit in still-"in_progress" messages and are
 // ignored. Returns the conversation's current node as the parent for any follow-up.
-async function pollForImage(s: Session, convId: string, timeoutMs: number): Promise<PollResult | null> {
+async function pollForImage(s: Session, convId: string, timeoutMs: number, excludeIds: Set<string> = new Set()): Promise<PollResult | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(4000);
@@ -222,7 +255,7 @@ async function pollForImage(s: Session, convId: string, timeoutMs: number): Prom
         if (part && typeof part === "object" && part.content_type === "image_asset_pointer" && typeof part.asset_pointer === "string") {
           const m = part.asset_pointer.match(/(file[-_][A-Za-z0-9]+)/);
           const t = msg.create_time ?? 0;
-          if (m && (!best || t >= best.t)) best = { fileId: m[1], t };
+          if (m && !excludeIds.has(m[1]) && (!best || t >= best.t)) best = { fileId: m[1], t }; // skip the uploaded INPUT image
         }
       }
     }
@@ -246,7 +279,8 @@ function hasAlphaChannel(png: Buffer): boolean {
 
 export interface WebGenerateOptions {
   prompt: string;
-  transparent?: boolean;
+  transparent?: boolean; // OPT-IN; default keeps the natural (opaque) output / the input's format on edits
+  inputImages?: Array<{ data: Buffer; name: string }>; // present ⇒ edit the uploaded image(s)
   timeoutMs?: number;
 }
 export interface WebGenerateResult {
@@ -255,6 +289,7 @@ export interface WebGenerateResult {
   project: string | null;
   filedIntoProject: boolean;
   backgroundRemoved: boolean;
+  edited: boolean;
 }
 
 /** Generate an image via the ChatGPT web pipeline. Throws WebUnavailableError to trigger a Codex fallback. */
@@ -263,25 +298,46 @@ export async function generateImageWeb(opts: WebGenerateOptions): Promise<WebGen
   const projectId = await ensureProject(s);
   const phase = opts.timeoutMs ?? PHASE_TIMEOUT;
 
+  const editing = !!opts.inputImages?.length;
+  // Transparency is OPT-IN. Only ask for it when explicitly requested — otherwise keep the natural
+  // (opaque) output, and on an edit keep the source's format/context.
   const prompt = opts.transparent
     ? `${opts.prompt}\n\nMake the background fully transparent (alpha PNG) — no backdrop, no solid fill behind the subject.`
     : opts.prompt;
 
-  const { conversationId } = await postMessage(s, { text: prompt });
+  // Build the message: a plain prompt, or a multimodal message with uploaded input image(s) to edit.
+  const exclude = new Set<string>();
+  let postOpts: { text?: string; content?: unknown; attachments?: unknown[] };
+  if (editing) {
+    const pointers: unknown[] = [];
+    const attachments: unknown[] = [];
+    for (const im of opts.inputImages!) {
+      const up = await uploadImage(s, im.data, im.name);
+      exclude.add(up.fileId); // never return the uploaded INPUT as the result
+      pointers.push({ content_type: "image_asset_pointer", asset_pointer: "file-service://" + up.fileId, size_bytes: up.size, width: up.width, height: up.height });
+      attachments.push({ id: up.fileId, name: im.name, mimeType: "image/png", width: up.width, height: up.height, size: up.size });
+    }
+    postOpts = { content: { content_type: "multimodal_text", parts: [...pointers, prompt] }, attachments };
+  } else {
+    postOpts = { text: prompt };
+  }
+
+  const { conversationId } = await postMessage(s, postOpts);
   // File into the project IMMEDIATELY — so a slow/failed generation never orphans the conversation
   // in the global chat list. We re-assert it at the end in case completion resets the field.
   let filed = projectId ? await fileIntoProject(s, conversationId, projectId) : false;
 
-  let poll = await pollForImage(s, conversationId, phase);
+  let poll = await pollForImage(s, conversationId, phase, exclude);
   if (!poll) throw new Error("web image did not finish in time (the model may have replied with text instead)");
   let png = await downloadImage(s, poll.fileId);
 
-  // Safety net: if a transparent image came back without an alpha channel, ask the chat to remove the
-  // background (the web image tool does this natively) and take the new result.
+  // Safety net: ONLY when transparency was requested but the result has no alpha — ask the chat to
+  // remove the background (the web tool does this natively) and take the new result.
   let backgroundRemoved = false;
   if (opts.transparent && !hasAlphaChannel(png)) {
+    exclude.add(poll.fileId);
     await postMessage(s, { convId: conversationId, parentId: poll.lastMessageId, text: "Remove the background entirely and return the exact same image with a fully transparent background (alpha PNG). Keep the subject identical." });
-    const poll2 = await pollForImage(s, conversationId, phase);
+    const poll2 = await pollForImage(s, conversationId, phase, exclude);
     if (poll2) {
       const png2 = await downloadImage(s, poll2.fileId);
       if (hasAlphaChannel(png2)) {
@@ -292,5 +348,5 @@ export async function generateImageWeb(opts: WebGenerateOptions): Promise<WebGen
   }
 
   if (projectId && !filed) filed = await fileIntoProject(s, conversationId, projectId);
-  return { png, conversationId, project: projectId, filedIntoProject: filed, backgroundRemoved };
+  return { png, conversationId, project: projectId, filedIntoProject: filed, backgroundRemoved, edited: editing };
 }
