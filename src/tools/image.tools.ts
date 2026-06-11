@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { join, isAbsolute, dirname } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { generateImage, codexAuthPath, CodexAuthMissingError, SETUP_HELP, type ImageFormat, type InputImage } from "../imagegen/chatgpt.js";
+import { generateImageWeb, WebUnavailableError } from "../imagegen/chatgptweb.js";
 import { knockoutGreenScreen, GREEN_SCREEN_SUFFIX } from "../imagegen/chromakey.js";
 import { assessGeneration, assessTransparency, optimizeImage, loadImageAsPng, pngSize } from "../imagegen/imageops.js";
 import { json, image, error, guard, ToolResult } from "../util/result.js";
@@ -22,14 +23,17 @@ export function registerImageTools(server: McpServer) {
     {
       title: "Generate or edit an image with your ChatGPT Plus account",
       description:
-        "Generate (or EDIT) an image using your ChatGPT Plus/Pro/Team subscription — the same " +
-        '"Sign in with ChatGPT" OAuth the Codex CLI uses, so NO OpenAI API key and no per-image billing ' +
-        "beyond your Plus plan. Shows it inline + saves it. Features: " +
+        "Generate (or EDIT) an image using the user's ChatGPT account — NO OpenAI API key. Primary path is " +
+        "the ChatGPT WEB pipeline (browser-session cookies) which gives NATIVE transparency and files each " +
+        "generation into the ChatGPT project 'Automatic Image Generate'; if the web path is unavailable " +
+        "(cookies missing/expired) it transparently FALLS BACK to the Codex path and says so. Shows it " +
+        "inline + saves it. Features: " +
         "(1) EDIT — pass `image` (path(s)) to modify an existing picture ('add a fiery glow', 'remove the text'); " +
         "(2) TRANSPARENCY — transparent=true makes a true alpha PNG via auto green-screen + ffmpeg chroma-key " +
-        "(best for isolated subjects: icons/items/one character); " +
-        "(3) COMPRESSION — maxSize downscales (the main size win for an optimized project) and quality/format " +
-        "re-encode. Default format PNG (Panorama/VTEX accept png/jpg, NOT webp). " +
+        "(soft-matte edges; best for isolated subjects: icons/items/one character); " +
+        "(3) COMPRESSION — maxSize downscales (the main size win for an optimized project) and encodeQuality/format " +
+        "re-encode. Default format PNG (Panorama/VTEX accept png/jpg, NOT webp); " +
+        "(4) QUALITY/SIZE — quality=low|high render control, and sizes up to 2K (e.g. 2048x2048). " +
         "One-time setup if not signed in: `npm i -g @openai/codex` then `codex login`. " +
         "Caveat: undocumented endpoint (may change).",
       inputSchema: {
@@ -42,19 +46,25 @@ export function registerImageTools(server: McpServer) {
           .optional()
           .describe("EDIT mode: path(s) to a source image to modify or use as reference. The prompt becomes the edit instruction."),
         out: z.string().optional().describe("Output path — absolute, or relative to the generated cache dir. Default: ~/.dota2-workshop-mcp/generated/<slug>-<id>.<ext>."),
-        size: z.string().optional().describe("'auto' (default) or WIDTHxHEIGHT, e.g. '1024x1024', '1024x1536' (portrait), '1536x1024' (landscape)."),
         format: z.enum(["png", "jpeg", "webp"]).optional().describe("Output format (default png). png/jpg are Panorama/VTEX-safe; webp is external-only (engine can't read it)."),
+        quality: z.enum(["low", "medium", "high", "auto"]).optional().describe("RENDER quality from gpt-image-2: 'low' = fast drafts, 'high' = final assets / dense detail, 'auto' = model default. Higher = slower + more image quota."),
+        size: z.string().optional().describe("'auto' (default) or WIDTHxHEIGHT. gpt-image-2 allows up to 2K+ (e.g. '1536x1024', '2048x2048'); edges must be multiples of 16."),
         maxSize: z.number().int().min(16).max(4096).optional().describe("COMPRESS: cap the longest side to this many px (keeps aspect). The biggest size win — e.g. 128/256 for icons. Model renders ≥1024, so this downscales."),
-        quality: z.number().int().min(1).max(100).optional().describe("COMPRESS: lossy quality 1–100 for webp/jpeg (omit ⇒ lossless). Lower = smaller. Ignored for png."),
+        encodeQuality: z.number().int().min(1).max(100).optional().describe("COMPRESS: lossy encode quality 1–100 for webp/jpeg (omit ⇒ lossless). Lower = smaller file. Ignored for png."),
         transparent: z.boolean().optional().describe("Produce a TRUE transparent (alpha) PNG via auto chroma-key (green screen → local knockout). Best for a single isolated subject; forces an alpha format."),
         background: z.enum(["auto", "transparent", "opaque"]).optional().describe("Background mode (default opaque). 'transparent' is an alias for transparent=true."),
-        model: z.string().optional().describe("Chat model hosting the image tool (default gpt-5.5)."),
+        engine: z
+          .enum(["auto", "web", "codex"])
+          .optional()
+          .describe("Backend: 'auto' (default) = ChatGPT web first (native transparency, files into the 'Automatic Image Generate' project), Codex fallback; 'web' = force web; 'codex' = force the Codex path (chroma-key transparency)."),
+        model: z.string().optional().describe("Codex chat model hosting the image tool (default gpt-5.5). Web path ignores this."),
         inline: z.boolean().optional().describe("Show the image inline in chat (default true). Set false to only save to disk and return the path."),
       },
     },
-    guard(async ({ prompt, image: imageArg, out, size, format, maxSize, quality, transparent, background, model, inline }): Promise<ToolResult> => {
+    guard(async ({ prompt, image: imageArg, out, size, format, quality, maxSize, encodeQuality, transparent, background, engine, model, inline }): Promise<ToolResult> => {
       const warnings: string[] = [];
       const wantTransparent = transparent === true || background === "transparent";
+      const eng = engine ?? "auto";
 
       // Final container. png/jpg are engine-safe; webp is external-only; jpeg can't hold alpha.
       let fmt = (format ?? "png") as ImageFormat;
@@ -76,45 +86,73 @@ export function registerImageTools(server: McpServer) {
       }
       const editing = !!inputImages?.length;
 
-      const genPrompt = wantTransparent ? prompt + GREEN_SCREEN_SUFFIX : prompt;
       const ext = fmt === "jpeg" ? "jpg" : fmt;
       const genDir = join(homedir(), ".dota2-workshop-mcp", "generated");
       const outPath = out ? (isAbsolute(out) ? out : join(genDir, out)) : join(genDir, `${slugify(prompt)}-${Date.now().toString(36)}.${ext}`);
       await mkdir(dirname(outPath), { recursive: true });
 
-      // Always render as PNG from the API (lossless source); the final format/size is produced locally.
-      let img;
-      try {
-        img = await generateImage({ prompt: genPrompt, size, model, inputImages });
-      } catch (e) {
-        if (e instanceof CodexAuthMissingError) return error(`${SETUP_HELP}\n\n(${e.message})\nAuth file checked: ${codexAuthPath()}`);
-        throw e; // guard() turns other errors into a clean error result
-      }
-      const generatedBytes = img.buffer.length;
-
-      // Validate the generation (catch a blank/failed render before we ship it).
-      const gen = await assessGeneration(img.buffer);
-      if (gen.blank) warnings.push(`the render looks near-blank/flat (luma range ${gen.lumaRange}) — it may have failed; try rephrasing or regenerate.`);
-
-      // Transparency via chroma-key, then validate the cut-out.
-      let buffer = img.buffer;
+      // ---- Acquire the image: ChatGPT WEB primary (native alpha), Codex fallback ----
+      // Web handles generation (not edits) and gives true transparency with no chroma-key. On any web
+      // failure we fall back to Codex and SAY SO in the result.
+      let buffer: Buffer | null = null;
+      let source = "";
       let transNote = "";
-      const quality_metrics: Record<string, unknown> = { lumaRange: gen.lumaRange, lumaStd: gen.lumaStd, blank: gen.blank };
-      if (wantTransparent) {
-        const ko = await knockoutGreenScreen(img.buffer); // throws (→ clean error) if not a clean green screen
-        buffer = ko.png;
+      let transparencyDone = false;
+      const tryWeb = !editing && eng !== "codex";
+      if (tryWeb) {
+        try {
+          const web = await generateImageWeb({ prompt, transparent: wantTransparent });
+          buffer = web.png;
+          source = "ChatGPT web";
+          transparencyDone = wantTransparent; // native alpha
+          if (web.backgroundRemoved) transNote += " · background removed in-chat";
+          if (web.filedIntoProject) transNote += " · in project “Automatic Image Generate”";
+          else if (web.project) warnings.push("couldn't file the conversation into the project (left in global chats).");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (eng === "web") return error(`Web image path failed: ${msg}`);
+          warnings.unshift(`⚠ FELL BACK TO CODEX — web path unavailable: ${msg}`);
+        }
+      }
+
+      if (!buffer) {
+        // Codex fallback (also the path for edits and engine='codex'). Transparency via chroma-key.
+        const genPrompt = wantTransparent ? prompt + GREEN_SCREEN_SUFFIX : prompt;
+        let img;
+        try {
+          img = await generateImage({ prompt: genPrompt, size, model, quality, inputImages });
+        } catch (e) {
+          if (e instanceof CodexAuthMissingError) return error(`${SETUP_HELP}\n\n(${e.message})\nAuth file checked: ${codexAuthPath()}`);
+          throw e; // guard() turns other errors into a clean error result
+        }
+        buffer = img.buffer;
+        source = "Codex";
+        if (wantTransparent) {
+          const ko = await knockoutGreenScreen(img.buffer); // throws (→ clean error) if not a clean green screen
+          buffer = ko.png;
+          transparencyDone = true;
+          transNote += ` · transparent via chroma-key (keyed ${ko.keyHex})`;
+        }
+      }
+      const generatedBytes = buffer.length;
+
+      // Validate: blank render? and (for transparent) did we actually get alpha?
+      const gen = await assessGeneration(buffer);
+      if (gen.blank) warnings.push(`the render looks near-blank/flat (luma range ${gen.lumaRange}) — it may have failed; try rephrasing or regenerate.`);
+      const quality_metrics: Record<string, unknown> = { source, lumaRange: gen.lumaRange, lumaStd: gen.lumaStd, blank: gen.blank };
+      if (transparencyDone) {
         const t = await assessTransparency(buffer);
         warnings.push(...t.warnings);
         quality_metrics.cornerAlpha = t.cornerAlpha;
         quality_metrics.opaquePct = t.opaquePct;
-        transNote = ` · transparent (keyed ${ko.keyHex}, ${t.opaquePct}% opaque)`;
+        transNote = ` · transparent (${t.opaquePct}% opaque)` + transNote;
       }
 
       // Compress / convert: only when the target differs from the lossless PNG we already hold.
       let mimeType = "image/png";
       let dims = pngSize(buffer) ?? { width: 0, height: 0 };
-      if (fmt !== "png" || maxSize != null || quality != null) {
-        const opt = await optimizeImage(buffer, { maxSize, quality, format: fmt });
+      if (fmt !== "png" || maxSize != null || encodeQuality != null) {
+        const opt = await optimizeImage(buffer, { maxSize, quality: encodeQuality, format: fmt });
         buffer = opt.buffer;
         mimeType = opt.mimeType;
         dims = { width: opt.width, height: opt.height };
@@ -127,7 +165,7 @@ export function registerImageTools(server: McpServer) {
       const sizeNote = optimized ? ` (was ${kb(generatedBytes)} PNG${maxSize ? `, downscaled to ${dims.width}×${dims.height}` : ""})` : "";
       const verb = editing ? "Edited" : "Generated";
       const caption =
-        `${verb} via ChatGPT Plus — ${dims.width}×${dims.height} ${fmt.toUpperCase()}, ${kb(buffer.length)}${sizeNote}${transNote}, saved to:\n${outPath}` +
+        `${verb} via ${source} — ${dims.width}×${dims.height} ${fmt.toUpperCase()}, ${kb(buffer.length)}${sizeNote}${transNote}, saved to:\n${outPath}` +
         (warnings.length ? `\n⚠ ${warnings.join("\n⚠ ")}` : "");
       const structured = {
         path: outPath,
@@ -137,6 +175,7 @@ export function registerImageTools(server: McpServer) {
         height: dims.height,
         format: fmt,
         mimeType,
+        source,
         transparent: wantTransparent,
         edited: editing,
         quality: quality_metrics,

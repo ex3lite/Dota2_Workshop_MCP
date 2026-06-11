@@ -1,10 +1,14 @@
 // Real transparency for the ChatGPT-account path, since the Codex `image_generation` tool flatly
-// rejects background:transparent (verified: HTTP 400 "Transparent background is not supported for
-// this model", for every model/param combo). Workaround we fully control: ask the model to paint the
-// subject on a flat green screen, then knock that green out locally with ffmpeg → a true alpha PNG.
-// Best for ISOLATED subjects (icons, items, a single character) — not full scenes.
+// rejects background:transparent (verified live across gpt-5.5 / gpt-image-1.5 / gpt-image-2). The
+// official OpenAI imagegen skill uses the same workaround: generate the subject on a flat green
+// screen, then key it out locally. This is a TS port of that skill's remove_chroma_key.py matte —
+// a SOFT matte (smoothstep alpha ramp) combined with a key-channel DOMINANCE alpha and despill, for
+// clean anti-aliased edges on glows. We decode the PNG to raw RGBA with ffmpeg, matte in JS, and
+// re-encode with the bundled PNG encoder (no extra deps). Best for ISOLATED subjects.
 import { ensureFfmpeg } from "../dota/ffmpeg.js";
 import { run } from "../dota/process.js";
+import { encodeRgbaPng } from "../util/png.js";
+import { pngSize } from "./imageops.js";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,53 +19,130 @@ export const GREEN_SCREEN_SUFFIX =
   "chroma-green background (RGB 0,255,0). Fill the entire background edge-to-edge with that exact green. " +
   "No gradient, no vignette, no shadow, no reflection, no extra elements.";
 
-export interface KnockoutResult {
-  png: Buffer; // RGBA PNG with the background removed
-  keyHex: string; // the background colour we sampled + keyed
-  avgAlpha: number; // 0..255 mean alpha (sanity signal that something became transparent)
+type RGB = [number, number, number];
+
+// Channels that carry the key colour (e.g. green for a green screen) — used for spill math.
+function spillChannels(key: RGB): number[] {
+  const keyMax = Math.max(key[0], key[1], key[2]);
+  if (keyMax < 128) return [];
+  const out: number[] = [];
+  for (let i = 0; i < 3; i++) if (key[i] >= keyMax - 16 && key[i] >= 128) out.push(i);
+  return out;
+}
+function smoothstep(v: number): number {
+  v = v < 0 ? 0 : v > 1 ? 1 : v;
+  return v * v * (3 - 2 * v);
 }
 
-/** Knock out the (near-pure-green) background of a generated PNG → RGBA PNG. Throws if it isn't a green screen. */
+export interface KnockoutResult {
+  png: Buffer; // RGBA PNG with the background removed
+  keyHex: string; // the sampled key colour
+  avgAlpha: number; // 0..255 mean alpha (sanity signal)
+}
+
+/** Knock out a (near-pure-green) background → RGBA PNG with a soft, despilled matte. Throws if it isn't a green screen. */
 export async function knockoutGreenScreen(
   srcPng: Buffer,
-  opts: { similarity?: number; blend?: number } = {},
+  opts: { transparentThreshold?: number; opaqueThreshold?: number } = {},
 ): Promise<KnockoutResult> {
+  const tT = opts.transparentThreshold ?? 12; // distance ≤ this ⇒ fully transparent
+  const oT = opts.opaqueThreshold ?? 200; // distance ≥ this ⇒ fully opaque (soft ramp between)
   const ff = await ensureFfmpeg();
-  const sim = opts.similarity ?? 0.3;
-  const blend = opts.blend ?? 0.1;
+  const size = pngSize(srcPng);
+  if (!size) throw new Error("knockout: source is not a PNG");
+  const { width, height } = size;
   const dir = await mkdtemp(join(tmpdir(), "mcp-chroma-"));
   const inP = join(dir, "in.png");
-  const outP = join(dir, "out.png");
+  const rawP = join(dir, "rgba.raw");
   try {
     await writeFile(inP, srcPng);
+    // run() returns stdout as a (binary-unsafe) string, so decode to a raw file and read the bytes.
+    const dec = await run(ff, ["-y", "-i", inP, "-f", "rawvideo", "-pix_fmt", "rgba", rawP], { maxOutputChars: 4000 });
+    if (dec.code !== 0) throw new Error("knockout decode failed: " + (dec.stderr || dec.stdout).slice(-200));
+    const px = await readFile(rawP);
+    if (px.length < width * height * 4) throw new Error("knockout: short raw buffer");
 
-    // Sample the real corner colour (avg of a 60×60 patch → 1px) so we key the exact green produced,
-    // not a guessed constant. run() returns stdout as a (binary-unsafe) string, so go via a raw file.
-    const cornerRaw = join(dir, "corner.raw");
-    await run(ff, ["-y", "-i", inP, "-vf", "crop=60:60:6:6,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", cornerRaw]);
-    const cb = await readFile(cornerRaw);
-    const [r, g, b] = [cb[0], cb[1], cb[2]];
-    const keyHex = "0x" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
-    // Guard: if the corner isn't clearly green, the model didn't give us a green screen — bail loudly
-    // rather than keying some arbitrary colour out of the subject.
-    if (!(g > 140 && r < 130 && b < 130)) {
-      throw new Error(
-        `background isn't a clean green screen (corner ${keyHex}) — can't isolate it. Try a simpler/single subject, or regenerate.`,
-      );
+    const key = sampleCornerKey(px, width, height);
+    const keyHex = "0x" + key.map((v) => v.toString(16).padStart(2, "0")).join("");
+    // Guard: if the corners aren't clearly green, the model didn't give us a green screen — bail loudly.
+    if (!(key[1] > 140 && key[0] < 130 && key[2] < 130)) {
+      throw new Error(`background isn't a clean green screen (corner ${keyHex}) — can't isolate it. Try a simpler/single subject, or regenerate.`);
     }
+    const sp = spillChannels(key);
+    const isSpill = [sp.includes(0), sp.includes(1), sp.includes(2)];
+    const nonSp = [0, 1, 2].filter((i) => !isSpill[i]);
+    const keyMax = Math.max(key[0], key[1], key[2]);
+    const chanOf = (r: number, g: number, b: number, i: number) => (i === 0 ? r : i === 1 ? g : b);
+    const keyStrength = (r: number, g: number, b: number) => {
+      if (sp.length > 1) {
+        let m = 255;
+        for (const i of sp) m = Math.min(m, chanOf(r, g, b, i));
+        return m;
+      }
+      return chanOf(r, g, b, sp[0]);
+    };
+    const nonKeyStrength = (r: number, g: number, b: number) => {
+      let m = 0;
+      for (const i of nonSp) m = Math.max(m, chanOf(r, g, b, i));
+      return m;
+    };
 
-    const vf = `colorkey=${keyHex}:${sim}:${blend},despill=type=green:mix=0.5:expand=0.3,format=rgba`;
-    const res = await run(ff, ["-y", "-i", inP, "-vf", vf, outP], { maxOutputChars: 4000 });
-    if (res.code !== 0) throw new Error("ffmpeg knockout failed: " + (res.stderr || res.stdout).slice(-300));
-    const png = await readFile(outP);
-
-    // Mean alpha as a quick sanity signal (fully-opaque output would be 255).
-    const aRaw = join(dir, "a.raw");
-    await run(ff, ["-y", "-i", outP, "-vf", "alphaextract,scale=1:1", "-f", "rawvideo", "-pix_fmt", "gray", aRaw]);
-    const avgAlpha = (await readFile(aRaw))[0] ?? 255;
-
-    return { png, keyHex, avgAlpha };
+    const out = Buffer.allocUnsafe(width * height * 4);
+    let alphaSum = 0;
+    const n = width * height;
+    for (let p = 0, i = 0; p < n; p++, i += 4) {
+      let r = px[i], g = px[i + 1], b = px[i + 2];
+      const a0 = px[i + 3];
+      const d = Math.max(Math.abs(r - key[0]), Math.abs(g - key[1]), Math.abs(b - key[2]));
+      // Only green-dominant pixels are matted; everything else stays opaque (protects the subject).
+      const dom = sp.length ? keyStrength(r, g, b) - nonKeyStrength(r, g, b) : 0;
+      const keyLike = d <= 32 || dom >= 16;
+      let alpha: number;
+      if (!keyLike) {
+        alpha = 255;
+      } else {
+        const soft = d <= tT ? 0 : d >= oT ? 255 : Math.round(255 * smoothstep((d - tT) / (oT - tT)));
+        let domA = 255;
+        if (sp.length && dom > 0) {
+          const denom = Math.max(1, keyMax - nonKeyStrength(r, g, b));
+          domA = Math.round((1 - Math.min(1, dom / denom)) * 255);
+        }
+        alpha = Math.min(soft, domA);
+      }
+      alpha = Math.round(alpha * (a0 / 255));
+      if (alpha > 0 && alpha <= 8) alpha = 0; // noise floor
+      if (alpha === 0) {
+        out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = 0;
+        continue;
+      }
+      // Despill: pull the key channel(s) down to the strongest non-key channel on partial pixels.
+      if (keyLike && alpha < 252 && sp.length && nonSp.length) {
+        const cap = Math.max(0, nonKeyStrength(r, g, b) - 1);
+        if (isSpill[0] && r > cap) r = cap;
+        if (isSpill[1] && g > cap) g = cap;
+        if (isSpill[2] && b > cap) b = cap;
+      }
+      out[i] = r; out[i + 1] = g; out[i + 2] = b; out[i + 3] = alpha;
+      alphaSum += alpha;
+    }
+    return { png: encodeRgbaPng(width, height, out), keyHex, avgAlpha: Math.round(alphaSum / n) };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// Median RGB across the four corner patches — robust to a little noise in the flat background.
+function sampleCornerKey(px: Buffer, w: number, h: number): RGB {
+  const p = Math.max(1, Math.min(w, h, 12));
+  const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+  for (const [x0, y0] of [[0, 0], [w - p, 0], [0, h - p], [w - p, h - p]]) {
+    for (let y = y0; y < y0 + p; y++) {
+      for (let x = x0; x < x0 + p; x++) {
+        const i = (y * w + x) * 4;
+        rs.push(px[i]); gs.push(px[i + 1]); bs.push(px[i + 2]);
+      }
+    }
+  }
+  const med = (a: number[]) => (a.sort((x, y) => x - y), a[a.length >> 1]);
+  return [med(rs), med(gs), med(bs)];
 }

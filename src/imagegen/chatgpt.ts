@@ -165,11 +165,13 @@ export function buildPayload(opts: {
   format: ImageFormat;
   model: string;
   background?: ImageBackground;
+  quality?: string; // "low" | "medium" | "high" | "auto"
   inputImages?: InputImage[];
 }) {
   // The image_generation tool supports `background: "transparent"` (alpha) on PNG/WebP.
   const imageTool: Record<string, unknown> = { type: "image_generation", output_format: opts.format, size: opts.size };
   if (opts.background) imageTool.background = opts.background;
+  if (opts.quality) imageTool.quality = opts.quality;
   // input_image parts (if any) turn this into an EDIT / reference-guided generation.
   const content: Array<Record<string, unknown>> = [];
   for (const im of opts.inputImages ?? []) {
@@ -254,6 +256,7 @@ export interface GenerateOptions {
   size?: string; // "auto" | "1024x1024" | ...
   format?: ImageFormat;
   background?: ImageBackground; // "transparent" for an alpha channel (PNG/WebP)
+  quality?: string; // "low" | "medium" | "high" | "auto" — render quality (gpt-image-2)
   inputImages?: InputImage[]; // present ⇒ edit/reference-guided generation
   model?: string;
   timeoutMs?: number; // total wall-clock budget
@@ -345,7 +348,7 @@ export async function generateImage(opts: GenerateOptions): Promise<GeneratedIma
   const model = opts.model ?? "gpt-5.5";
   const timeoutMs = opts.timeoutMs ?? 300_000;
   const stallMs = opts.stallMs ?? 120_000;
-  const payload = buildPayload({ prompt: opts.prompt, size, format, model, background: opts.background, inputImages: opts.inputImages });
+  const payload = buildPayload({ prompt: opts.prompt, size, format, model, background: opts.background, quality: opts.quality, inputImages: opts.inputImages });
 
   let auth = await readCodexAuth();
   auth = await ensureFreshToken(auth);

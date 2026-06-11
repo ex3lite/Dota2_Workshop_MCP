@@ -74,8 +74,12 @@ export async function assessTransparency(buf: Buffer): Promise<TransQuality> {
     await writeFile(inP, buf);
     // alphaextract MUST come before scale — scaling first can negotiate away the alpha plane.
     await run(ff, ["-y", "-i", inP, "-vf", "alphaextract,scale=64:64", "-f", "rawvideo", "-pix_fmt", "gray", raw]);
-    const a = await readFile(raw);
+    const a = await readFile(raw).catch(() => Buffer.alloc(0));
     const W = 64;
+    if (a.length < W * W) {
+      // No alpha plane → alphaextract produced nothing → the image is fully opaque.
+      return { cornerAlpha: 255, opaquePct: 100, warnings: ["the image came back fully opaque (no transparency) — the model didn't honor the transparent request; retry or use engine='codex'."] };
+    }
     let opaque = 0;
     for (const v of a) if (v > 128) opaque++;
     const opaquePct = Math.round((100 * opaque) / (a.length || 1));
