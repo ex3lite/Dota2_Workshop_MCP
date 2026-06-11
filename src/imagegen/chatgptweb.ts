@@ -268,6 +268,10 @@ export async function generateImageWeb(opts: WebGenerateOptions): Promise<WebGen
     : opts.prompt;
 
   const { conversationId } = await postMessage(s, { text: prompt });
+  // File into the project IMMEDIATELY — so a slow/failed generation never orphans the conversation
+  // in the global chat list. We re-assert it at the end in case completion resets the field.
+  let filed = projectId ? await fileIntoProject(s, conversationId, projectId) : false;
+
   let poll = await pollForImage(s, conversationId, phase);
   if (!poll) throw new Error("web image did not finish in time (the model may have replied with text instead)");
   let png = await downloadImage(s, poll.fileId);
@@ -287,6 +291,6 @@ export async function generateImageWeb(opts: WebGenerateOptions): Promise<WebGen
     }
   }
 
-  const filedIntoProject = projectId ? await fileIntoProject(s, conversationId, projectId) : false;
-  return { png, conversationId, project: projectId, filedIntoProject, backgroundRemoved };
+  if (projectId && !filed) filed = await fileIntoProject(s, conversationId, projectId);
+  return { png, conversationId, project: projectId, filedIntoProject: filed, backgroundRemoved };
 }
